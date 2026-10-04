@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(pnpm --filter *)",
+      "Bash(pnpm --filter * typecheck*)",
+      "Bash(pnpm --filter * test*)",
+      "Bash(pnpm --filter * lint*)",
+      "Bash(pnpm --filter * build*)",
       "Bash(pnpm turbo run *)",
       "Bash(pnpm typecheck*)",
       "Bash(pnpm test*)",
@@ -16,7 +19,12 @@
       "Bash(docker compose start *)",
       "Bash(docker compose restart *)",
       "Bash(docker compose logs *)",
-      "Bash(docker compose exec -T *)",
+      "Bash(docker compose exec -T timescaledb psql -U fleet_ro *)",
+      "Bash(docker compose exec -T redpanda rpk cluster health*)",
+      "Bash(docker compose exec -T redpanda rpk topic list*)",
+      "Bash(docker compose exec -T redpanda rpk topic describe *)",
+      "Bash(docker compose exec -T redpanda rpk topic consume *)",
+      "Bash(timeout * docker compose exec -T redpanda rpk topic consume *)",
 
       "Bash(curl -s localhost:*)",
       "Bash(curl -sN localhost:*)",
@@ -68,17 +76,19 @@
 
       "Bash(aws *)",
       "Bash(eas build*)",
-      "Bash(fastlane*)",
 
       "Edit(**/package.json)",
       "Edit(tools/**)",
-      "Write(tools/**)",
       "Edit(.github/workflows/**)",
-      "Write(.github/workflows/**)",
-      "Edit(.claude/**)",
-      "Write(.claude/**)"
+      "Edit(.claude/**)"
     ],
     "deny": [
+      "PowerShell",
+      "Bash(powershell*)",
+      "Bash(pwsh*)",
+      "Bash(cmd.exe*)",
+      "Bash(cmd /c*)",
+
       "Bash(pnpm publish*)",
       "Bash(pnpm dlx*)",
       "Bash(npx *)",
@@ -112,6 +122,7 @@
       "Bash(k6 cloud*)",
       "Bash(eas submit*)",
       "Bash(eas update*)",
+      "Bash(fastlane*)",
 
       "Bash(cat .env*)",
       "Bash(cat **/.env*)",
