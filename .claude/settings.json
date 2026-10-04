@@ -1,0 +1,183 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm --filter * typecheck*)",
+      "Bash(pnpm --filter * test*)",
+      "Bash(pnpm --filter * lint*)",
+      "Bash(pnpm --filter * build*)",
+      "Bash(pnpm turbo run *)",
+      "Bash(pnpm typecheck*)",
+      "Bash(pnpm test*)",
+      "Bash(pnpm lint*)",
+      "Bash(pnpm build*)",
+      "Bash(pnpm simulate*)",
+      "Bash(pnpm install --frozen-lockfile*)",
+
+      "Bash(docker compose ps*)",
+      "Bash(docker compose up -d*)",
+      "Bash(docker compose stop *)",
+      "Bash(docker compose start *)",
+      "Bash(docker compose restart *)",
+      "Bash(docker compose logs *)",
+      "Bash(docker compose exec -T timescaledb psql -U fleet_ro *)",
+      "Bash(docker compose exec -T redpanda rpk cluster health*)",
+      "Bash(docker compose exec -T redpanda rpk topic list*)",
+      "Bash(docker compose exec -T redpanda rpk topic describe *)",
+      "Bash(docker compose exec -T redpanda rpk topic consume *)",
+      "Bash(timeout * docker compose exec -T redpanda rpk topic consume *)",
+
+      "Bash(curl -s localhost:*)",
+      "Bash(curl -sN localhost:*)",
+      "Bash(curl -s http://localhost:*)",
+      "Bash(curl -sN http://localhost:*)",
+      "Bash(timeout 5 curl -sN localhost:*)",
+      "Bash(timeout 20 curl -sN localhost:*)",
+
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch --show-current)",
+      "Bash(git rev-parse*)",
+      "Bash(git stash list)",
+
+      "Bash(k6 run *)",
+
+      "Bash(terraform fmt*)",
+      "Bash(terraform init -backend=false*)",
+      "Bash(terraform validate*)",
+      "Bash(tflint*)",
+      "Bash(actionlint*)",
+
+      "Bash(date*)",
+      "Bash(ls *)"
+    ],
+    "ask": [
+      "Bash(pnpm add*)",
+      "Bash(pnpm remove*)",
+      "Bash(pnpm install*)",
+      "Bash(pnpm dev*)",
+      "Bash(pnpm run *)",
+      "Bash(node *)",
+
+      "Bash(docker compose down*)",
+
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git checkout*)",
+      "Bash(git switch*)",
+      "Bash(git merge*)",
+      "Bash(git rebase*)",
+      "Bash(git stash)",
+      "Bash(git stash -*)",
+      "Bash(git stash push*)",
+      "Bash(git stash save*)",
+      "Bash(git stash pop*)",
+      "Bash(git stash apply*)",
+      "Bash(git stash branch*)",
+      "Bash(git stash store*)",
+
+      "Bash(terraform init*)",
+      "Bash(terraform plan*)",
+
+      "Bash(aws *)",
+      "Bash(eas build*)",
+
+      "Edit(**/package.json)",
+      "Edit(tools/**)",
+      "Edit(.github/workflows/**)",
+      "Edit(.claude/**)"
+    ],
+    "deny": [
+      "PowerShell",
+      "Bash(powershell*)",
+      "Bash(pwsh*)",
+      "Bash(cmd.exe*)",
+      "Bash(cmd /c*)",
+
+      "Bash(pnpm publish*)",
+      "Bash(pnpm dlx*)",
+      "Bash(npx *)",
+
+      "Bash(docker compose down -v*)",
+      "Bash(docker compose down --volumes*)",
+      "Bash(docker volume rm*)",
+      "Bash(docker system prune*)",
+      "Bash(docker volume prune*)",
+
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git checkout -- .*)",
+      "Bash(git restore .*)",
+      "Bash(git branch -D*)",
+      "Bash(git stash drop*)",
+      "Bash(git stash clear*)",
+
+      "Bash(rm -rf*)",
+      "Bash(rm -fr*)",
+
+      "Bash(terraform apply*)",
+      "Bash(terraform destroy*)",
+      "Bash(terraform import*)",
+      "Bash(terraform state*)",
+      "Bash(terraform force-unlock*)",
+      "Bash(terraform workspace delete*)",
+
+      "Bash(k6 cloud*)",
+      "Bash(eas submit*)",
+      "Bash(eas update*)",
+      "Bash(fastlane*)",
+
+      "Bash(cat .env*)",
+      "Bash(cat **/.env*)",
+
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.production)",
+      "Read(**/.env.test)",
+      "Edit(**/.env)",
+      "Edit(**/.env.local)",
+      "Edit(**/.env.production)",
+      "Read(**/*.tfstate)",
+      "Read(**/*.tfstate.backup)",
+      "Read(**/*.tfvars)",
+      "Read(**/*.keystore)",
+      "Read(**/*.jks)",
+      "Read(**/*.pem)",
+      "Read(**/*.p12)",
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/verify-affected.mjs\"",
+            "timeout": 600,
+            "statusMessage": "Verificando typecheck y tests de los paquetes afectados"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/verify-affected.mjs\"",
+            "timeout": 600,
+            "statusMessage": "Verificando typecheck y tests de los paquetes afectados"
+          }
+        ]
+      }
+    ]
+  }
+}
