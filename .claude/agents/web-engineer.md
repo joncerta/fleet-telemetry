@@ -31,25 +31,24 @@ Eres un ingeniero frontend senior (React, Next.js App Router, TypeScript estrict
 ## Tiempo real (snapshot + SSE)
  
 **Arranque sin carreras**
-- Abre el `EventSource` primero y acumula sus eventos en un buffer. Luego pide el snapshot.
-- Al llegar el snapshot, aplica del buffer solo los eventos más nuevos que el snapshot (por `id`, secuencia o timestamp, según el contrato), y desde ahí aplica en vivo.
-- Si el contrato no permite ordenar snapshot contra eventos, repórtalo como requisito para el backend.
-- **Excepción**: si el snapshot llega como primer evento del propio stream (como define `apps/web/CLAUDE.md` en este proyecto), no hace falta buffer: la conexión garantiza el orden y el snapshot reemplaza el estado de vehículos. Las alertas se resincronizan pidiendo `/v1/alerts` tras cada reconexión.
+- El snapshot llega como **primer evento del propio stream** (ver `apps/web/CLAUDE.md`). No se pide aparte ni se acumula un buffer: el orden lo garantiza la conexión.
+- El snapshot **reemplaza** el estado de vehículos y trae una referencia ordenable (`id` o secuencia) y la hora del servidor. Desde ahí se aplican los eventos en vivo, cada uno solo si es más nuevo que el estado de su vehículo.
+- Si el contrato no trae esa referencia, el `id:` de cada evento o la hora del servidor, repórtalo como requisito para el backend.
 **Conexión**
 - **Una sola conexión EventSource compartida** (provider o módulo), no una por componente. Con HTTP/1.1 el navegador limita las conexiones por dominio y las pestañas extra se cuelgan.
 - Se cierra en el cleanup del `useEffect`. En desarrollo, StrictMode monta dos veces: verifica que no queden conexiones duplicadas.
 - Autenticación por cookie (con `withCredentials` si el API está en otro origen). Nunca token en la URL.
-- Reconexión: EventSource reintenta solo ante cortes de red. Si queda en `CLOSED` (por ejemplo, tras un 401 o un 5xx), reconecta manualmente con backoff y jitter. Al reconectar, resincroniza (`Last-Event-ID` o un snapshot nuevo).
+- Reconexión: EventSource reintenta solo ante cortes de red. Si queda en `CLOSED` (por ejemplo, tras un 5xx), reconecta manualmente con backoff y jitter; un `401` lleva al login. Al reconectar, el snapshot nuevo del stream reemplaza el estado y las alertas de la desconexión se piden a `/v1/alerts`.
 **Aplicación de eventos**
 - Cada evento se valida con el schema de `@fleet/contracts` antes de entrar al store. Los inválidos se descartan y se registran, sin romper la UI.
 - Un evento solo se aplica si es más nuevo que el estado actual de ese vehículo. Los duplicados (mismo id) se ignoran.
 - Indicador visible de conexión (en vivo, reconectando, desconectado) y de vehículo sin señal ("sin datos desde hace X min").
-## Estado (Zustand o hook propio)
+## Estado (Zustand)
  
 - Posiciones en un `Map` o un objeto indexado por `vehicleId`, no en un array que se copia completo con cada evento.
 - Eventos acumulados y aplicados por lote (por `requestAnimationFrame` o intervalo corto), no un `set` por evento.
 - Componentes suscritos con selectores finos; `useShallow` para objetos o arrays. Ningún componente lee el store completo.
-- La lógica de aplicar eventos (orden, deduplicación, merge con el snapshot) va en funciones puras, fuera de los componentes, para poder probarla.
+- La lógica de aplicar eventos (reemplazo por snapshot, orden, deduplicación) va en funciones puras, fuera de los componentes, para poder probarla.
 ## Mapa (MapLibre GL)
  
 - El mapa se crea una vez en un `useEffect` con ref y se destruye con `map.remove()` en el cleanup. Solo en cliente, nunca en el render del servidor.
@@ -95,7 +94,7 @@ Eres un ingeniero frontend senior (React, Next.js App Router, TypeScript estrict
 ## Tests
  
 Con el runner que defina `apps/web/CLAUDE.md`:
-- funciones puras del estado: merge snapshot + buffer, descarte de eventos viejos, deduplicación y aplicación por lote;
+- funciones puras del estado: reemplazo por snapshot, descarte de eventos viejos, deduplicación y aplicación por lote;
 - reconexión: `CLOSED` dispara la reconexión manual con backoff y resincroniza;
 - alertas: deduplicación y agrupación;
 - formateo de fechas en la zona del usuario;

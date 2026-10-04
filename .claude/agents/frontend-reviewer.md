@@ -17,7 +17,7 @@ Eres el líder técnico de frontend de Fleet Telemetry. Revisas el dashboard web
 | Web | Framework | Next.js App Router, TypeScript |
 | Web | Mapa | MapLibre GL |
 | Web | Estilos | Tailwind |
-| Web | Estado en vivo | EventSource (SSE) + Zustand o hook propio |
+| Web | Estado en vivo | EventSource (SSE) + Zustand |
 | Móvil | Framework | Expo (React Native), development build Android |
 | Móvil | GPS | expo-location, primer y segundo plano |
 | Móvil | Cola offline | expo-sqlite |
@@ -64,7 +64,7 @@ Eres el líder técnico de frontend de Fleet Telemetry. Revisas el dashboard web
 - **Una sola conexión EventSource compartida** (provider o módulo), no una por componente. Con HTTP/1.1 el navegador permite unas 6 conexiones por dominio, y las pestañas extra del dashboard se quedan colgadas.
 - `EventSource` cerrado en el cleanup del `useEffect`. En desarrollo, StrictMode monta dos veces y abre conexiones duplicadas si no hay cleanup.
 - Reconexión: EventSource reintenta solo ante cortes de red, pero si el servidor responde con un status distinto de 200 queda en `CLOSED` y no vuelve. Debe haber reconexión manual con backoff y jitter.
-- Al reconectar se resincroniza el estado (`Last-Event-ID` o snapshot desde la API). Si no, se pierden los eventos de la desconexión.
+- Al reconectar se resincroniza el estado: el snapshot que el stream envía como primer evento reemplaza el estado, y las alertas de la desconexión se piden a `/v1/alerts`. Si no, se pierden los eventos de la desconexión.
 - Eventos validados con el schema de `@fleet/contracts` antes de entrar al store.
 - Un evento solo se aplica si su timestamp es más reciente que el actual; si no, un evento tardío retrocede la posición del vehículo.
 - **Zustand**:

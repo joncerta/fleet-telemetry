@@ -35,7 +35,7 @@ Estas reglas complementan el `CLAUDE.md` de la raíz. El agente que trabaja aqu�
    - Indicador visible: en vivo, reconectando, desconectado.
 8. **Rendimiento**: los vehículos son **una** fuente GeoJSON del mapa, actualizada con `setData` a lo sumo cada ~500 ms, con los eventos acumulados entre actualizaciones. Prohibido un `<Marker>` o componente React por vehículo. Los componentes se suscriben al store con selectores finos (`useShallow` para objetos o arrays).
 9. **Minutos detenido**: se calculan en el cliente desde `stoppedSince` con un tick de 30 s, usando la **hora del servidor** (desfase estimado a partir de la hora que trae el snapshot o la respuesta de `/v1/summary`), no el reloj del navegador.
-10. **Sin señal**: un vehículo sin eventos por encima del umbral se marca como "sin datos desde hace X min".
+10. **Sin señal**: un vehículo sin eventos por más de **5 min** (contra la hora del servidor) se marca como "sin datos desde hace X min".
 ## Estructura
 - `src/features/<feature>/` (`fleet`, `alerts`, `summary`, `chat`, `auth`): hooks, store y funciones puras de cada feature.
 - Componentes de presentación sin fetch ni acceso al store global; reciben datos por props o selectores.
