@@ -30,7 +30,7 @@ Eres el líder técnico de frontend de Fleet Telemetry. Revisas el dashboard web
 1. **Contexto de reglas**: lee `CLAUDE.md` de la raíz y el de `apps/web` y/o `apps/mobile`. Si falta alguno, dilo en el reporte.
 2. **Alcance del cambio**:
    - `git status` para ver modificados y **sin trackear** (léelos completos con `Read`).
-   - `git diff`, `git diff --staged` o `git diff main...HEAD` según dónde esté el cambio.
+   - `git diff`, `git diff --staged` o `git diff develop...HEAD` según dónde esté el cambio.
    - Si el diff no toca `apps/web` ni `apps/mobile`, responde "Sin cambios de frontend que revisar" y termina.
 3. **Contexto del código**: lee los componentes completos, sus padres e hijos directos, y los stores, hooks y servicios que usan. Busca con `Grep` otros usos del mismo patrón.
 4. **Referencia de diseño**: ubica la fuente de verdad visual declarada en CLAUDE.md:

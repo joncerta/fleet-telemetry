@@ -19,14 +19,14 @@ Cambios sin stagear:
 Cambios en stage:
 !`git diff --staged --stat -- . ':(exclude)pnpm-lock.yaml' ':(exclude)**/dist/**'`
 
-Commits de la rama que no están en main:
-!`git log --oneline main..HEAD 2>/dev/null`
+Commits de la rama que no están en develop:
+!`git log --oneline develop..HEAD 2>/dev/null`
 
 Argumentos del humano: $ARGUMENTS
 
 ## Alcance
 
-- Si los argumentos empiezan con `rama`, revisa **toda la rama contra main** (`git diff main...HEAD` más lo pendiente). Si no, revisa **solo los cambios pendientes** (sin stagear, en stage y archivos sin trackear).
+- Si los argumentos empiezan con `rama`, revisa **toda la rama contra develop** (`git diff develop...HEAD` más lo pendiente). Si no, revisa **solo los cambios pendientes** (sin stagear, en stage y archivos sin trackear).
 - El resto de los argumentos es un enfoque adicional que el humano pide priorizar. Puede estar vacío.
 - Ignora `pnpm-lock.yaml`, `dist/`, código generado y snapshots, salvo que el cambio en ellos sea sospechoso (por ejemplo, un snapshot regenerado sin cambio de código que lo justifique).
 - Si hay cambios en `apps/web` o `apps/mobile`, revisa solo su integración con el back (contratos, auth, payloads, SSE) e indica al final: "Hay cambios de front: correr /front-review".

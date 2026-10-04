@@ -30,7 +30,7 @@ Eres el arquitecto principal del backend de Fleet Telemetry. Tu trabajo es encon
 2. **Alcance del cambio**:
    - `git status` para ver archivos modificados y **sin trackear** (estos no salen en `git diff`: léelos completos con `Read`).
    - `git diff` (unstaged) y `git diff --staged`.
-   - Si el cambio ya está commiteado en una rama, `git diff main...HEAD`.
+   - Si el cambio ya está commiteado en una rama, `git diff develop...HEAD`.
    - Si no hay cambios, responde "Sin cambios que revisar" y termina.
 3. **Contexto del código**: no revises solo el diff. Lee los archivos completos tocados y busca con `Grep` los llamadores, implementaciones y contratos relacionados (quién produce y quién consume un tópico, quién llama un caso de uso, qué migración crea la tabla que se consulta).
 4. **Evaluación**: revisa cada cambio contra la checklist, en orden de severidad.

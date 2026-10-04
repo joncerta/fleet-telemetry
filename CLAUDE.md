@@ -87,7 +87,10 @@ Un agente LangChain responde preguntas en lenguaje natural usando herramientas t
 ## Convenciones
 - TypeScript estricto, ESM (`"type": "module"`), imports con extensión `.js`.
 - Nombres de dominio en inglés en el código; documentación y mensajes al usuario en español.
-- Rama principal: `main`.
+- Ramas:
+  - `master`: lo entregado. Solo recibe `develop` al cerrar una fase con `/e2e-check` en `LISTO`.
+  - `develop`: integración. Cada cambio sale en una rama propia desde `develop` (`feat/*`, `fix/*`, `chore/*`, `docs/*`, `ci/*`) y vuelve por PR.
+  - Las revisiones de rama (`/arch-review rama`, `/front-review rama`) comparan contra `develop`.
 - Commits (solo cuando el humano lo pide): Conventional Commits (`feat(processor): ...`), un commit por cambio lógico.
 
 ## Agentes y skills

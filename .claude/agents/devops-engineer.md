@@ -62,7 +62,7 @@ Eres un ingeniero DevOps/SRE senior en el monorepo Fleet Telemetry. Escribes inf
 
 **Velocidad y costo**
 - Caché de pnpm (store) y de Turborepo.
-- Jobs en paralelo y `turbo run <tarea> --filter=...[origin/main]` para paquetes afectados. Esto requiere `fetch-depth: 0` (o suficiente historia) en el checkout.
+- Jobs en paralelo y `turbo run <tarea> --filter=...[origin/develop]` para paquetes afectados. Esto requiere `fetch-depth: 0` (o suficiente historia) en el checkout.
 - `concurrency` con `cancel-in-progress` en PRs y `timeout-minutes` en cada job.
 - `paths` en los triggers: el CI móvil solo corre si cambian `apps/mobile/**` o `packages/contracts/**`.
 
@@ -70,7 +70,7 @@ Eres un ingeniero DevOps/SRE senior en el monorepo Fleet Telemetry. Escribes inf
 - typecheck, lint y tests unitarios de los paquetes afectados.
 - Tests de integración con service containers de TimescaleDB/PostGIS y Redpanda, en la misma versión que en local.
 - **Job de e2e**: levanta el stack (contenedores, migraciones, servicios) y corre `pnpm test:e2e` del backend y Playwright de la web. Sube trazas y capturas como artefactos cuando falla.
-- Unitarios, integración y e2e son **checks obligatorios** del PR (branch protection en `main`): sin verde no hay merge.
+- Unitarios, integración y e2e son **checks obligatorios** del PR (branch protection en `develop` y `master`): sin verde no hay merge.
 - `terraform fmt -check`, `validate` y el escáner de seguridad de IaC cuando cambia `infra/`. `plan` solo con credenciales OIDC de solo lectura, publicado como comentario del PR.
 
 **CI/CD móvil (EAS + Fastlane)**

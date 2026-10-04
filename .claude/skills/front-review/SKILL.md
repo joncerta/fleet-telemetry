@@ -19,14 +19,14 @@ Cambios sin stagear:
 Cambios en stage:
 !`git diff --staged --stat -- apps/web apps/mobile packages/contracts ':(exclude)**/dist/**' ':(exclude)**/.next/**'`
 
-Commits de la rama que no están en main:
-!`git log --oneline main..HEAD -- apps/web apps/mobile 2>/dev/null`
+Commits de la rama que no están en develop:
+!`git log --oneline develop..HEAD -- apps/web apps/mobile 2>/dev/null`
 
 Argumentos del humano: $ARGUMENTS
 
 ## Alcance
 
-- Si los argumentos empiezan con `rama`, revisa **toda la rama contra main** (`git diff main...HEAD` más lo pendiente). Si no, revisa **solo los cambios pendientes** (sin stagear, en stage y archivos sin trackear).
+- Si los argumentos empiezan con `rama`, revisa **toda la rama contra develop** (`git diff develop...HEAD` más lo pendiente). Si no, revisa **solo los cambios pendientes** (sin stagear, en stage y archivos sin trackear).
 - El resto de los argumentos es un enfoque adicional que el humano pide priorizar (por ejemplo, "pixel perfect del panel de alertas"). Puede estar vacío.
 - Ignora `.next/`, `dist/`, código generado y lockfiles. **Sí revisa los snapshots visuales**: uno regenerado sin explicación es un hallazgo.
 - Si hay cambios en contratos, auth, payloads o en el consumo de SSE, indica al final: "Toca integración con el back: correr /arch-review".
