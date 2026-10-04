@@ -4,7 +4,7 @@ Estas reglas complementan el `CLAUDE.md` de la raíz. El agente que trabaja aqu�
 ## Stack decidido
 - Expo (SDK actual) + TypeScript estricto, **development build** (Expo Go no sirve para ubicación en segundo plano). Plataforma de demo: Android.
 - `expo-location` (primer y segundo plano), `expo-task-manager`, `expo-sqlite`, `@react-native-community/netinfo`, `expo-secure-store`, `expo-crypto` (UUID v4).
-- Dependencias nativas o de Expo siempre con `npx expo install`; un cambio nativo o de config plugin exige un development build nuevo.
+- Dependencias nativas o de Expo siempre con `pnpm expo install`, desde `apps/mobile` (`npx` está denegado en `settings.json`); un cambio nativo o de config plugin exige un development build nuevo.
 - Tipos y validación solo desde `@fleet/contracts`.
 ## Parámetros (no inventar otros)
 | Parámetro | Valor |
