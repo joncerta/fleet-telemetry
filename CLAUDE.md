@@ -130,7 +130,8 @@ Skills (`.claude/skills/`):
 4. No edites `docs/PROGRESS.md` por tu cuenta: se actualiza con `/session-handoff`.
 
 ## Comandos
-- `docker compose up -d` — Redpanda + TimescaleDB.
+- `docker compose up -d --wait` — solo infraestructura (Redpanda + TimescaleDB), para desarrollar con `pnpm dev`.
+- `docker compose --profile app up -d --wait` — sistema completo en contenedores: infraestructura, servicios y web.
 - `pnpm install && pnpm build` — compila todo.
 - `pnpm db:migrate` — aplica migraciones pendientes.
 - `pnpm dev` — levanta todos los servicios en modo watch (lo corre el humano).
