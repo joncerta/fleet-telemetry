@@ -8,7 +8,7 @@ agent: backend-engineer
 
 Crea este caso de uso: **$ARGUMENTS**
 
-Servicios disponibles: !`ls services`
+Servicios disponibles: !`ls services 2>/dev/null || echo "(services/ no existe todavía)"`
 
 ## 0. Entender antes de escribir
 

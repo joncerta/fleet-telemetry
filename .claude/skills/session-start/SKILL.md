@@ -20,7 +20,7 @@ Cambios sin commit:
 Stashes: !`git stash list`
 
 Entorno local:
-!`docker compose ps --format "table {{.Name}}\t{{.Status}}" 2>&1`
+!`docker compose ps --format "table {{.Name}}\t{{.Status}}" 2>&1 || echo "(entorno local abajo o sin docker-compose.yml todavía)"`
 
 Objetivo de esta sesión (del humano): $ARGUMENTS
 
