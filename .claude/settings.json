@@ -135,5 +135,31 @@
       "Read(~/.aws/**)",
       "Read(~/.ssh/**)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/verify-affected.mjs\"",
+            "timeout": 600,
+            "statusMessage": "Verificando typecheck y tests de los paquetes afectados"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/hooks/verify-affected.mjs\"",
+            "timeout": 600,
+            "statusMessage": "Verificando typecheck y tests de los paquetes afectados"
+          }
+        ]
+      }
+    ]
   }
 }

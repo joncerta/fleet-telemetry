@@ -119,7 +119,7 @@ Skills (`.claude/skills/`):
 
 ## Antes de terminar cualquier tarea
 1. **Tests por niveles**:
-   - **Automático**: al terminar cada turno o subagente, un hook corre typecheck y tests unitarios de los paquetes afectados. Si fallan, no se puede terminar.
+   - **Automático**: al terminar cada turno o subagente, un hook (`tools/hooks/verify-affected.mjs`) corre typecheck y tests unitarios de los paquetes afectados. Si fallan, no se puede terminar; tras 3 bloqueos seguidos deja cerrar, y la tarea se reporta como NO terminada.
    - **Al cerrar cada tarea**: tests unitarios, de integración y e2e de los flujos afectados, en verde. Si el stack local no está arriba, el e2e queda "no verificado" y **la tarea no se da por terminada**: se pide al humano que lo levante.
    - **Antes de proponer un commit**: suite e2e completa (`pnpm test:e2e`) en verde.
 2. Si tomaste una decisión de arquitectura, agrega o actualiza un ADR en `docs/adr/`.
