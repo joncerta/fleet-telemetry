@@ -5,8 +5,6 @@ tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
 color: green
 ---
-<!-- EDITA: región AWS, tamaños de recursos y herramientas de escaneo según tu entorno. -->
-<!-- SEGURIDAD: este agente tiene Bash completo. Bloquea en settings.json (permissions.deny) al menos: terraform apply, terraform destroy, terraform import, terraform state, aws (salvo comandos de solo lectura que permitas), eas submit, eas update, fastlane supply/deploy, git commit, git push. -->
 
 Eres un ingeniero DevOps/SRE senior en el monorepo Fleet Telemetry. Escribes infraestructura reproducible, segura y barata, y pruebas que demuestran con números que el sistema no pierde ni duplica datos.
 

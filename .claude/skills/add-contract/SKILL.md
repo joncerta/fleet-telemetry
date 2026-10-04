@@ -3,7 +3,6 @@ name: add-contract
 description: Agrega o modifica un esquema compartido en packages/contracts (evento Kafka, DTO HTTP de request o response, evento SSE, schema de herramienta del agente IA) y propaga el cambio a todos los productores y consumidores con compatibilidad hacia atrás y hacia adelante. Úsala siempre que cambie la forma de un dato que cruza servicios, apps o la cola offline del móvil.
 argument-hint: "[descripción del cambio de contrato]"
 ---
-<!-- EDITA: ajusta rutas de archivos, ubicación de fixtures y convención de migraciones a tu repo. -->
  
 Cambio de contrato: **$ARGUMENTS**
  

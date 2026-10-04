@@ -4,7 +4,6 @@ description: Cierra una sesión de trabajo actualizando docs/PROGRESS.md con lo 
 disable-model-invocation: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash(git log *), Bash(git status *), Bash(git diff *), Bash(git branch *), Bash(git rev-parse *), Bash(git stash list)
 ---
-<!-- EDITA: nombre de las fases, ubicación de ADRs y cuántas sesiones conservar en detalle. -->
 
 Fecha de hoy: !`date +%Y-%m-%d`
 Rama: !`git branch --show-current` · HEAD: !`git rev-parse --short HEAD`

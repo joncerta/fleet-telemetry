@@ -6,7 +6,6 @@ context: fork
 agent: qa-verifier
 allowed-tools: Read, Grep, Glob, Bash
 ---
-<!-- EDITA: puertos, nombres de servicios de docker compose, credenciales locales, tablas y endpoints según tu repo. -->
 
 Argumentos: $ARGUMENTS
 - `video`: agrega al final el chequeo de preparación para grabar.

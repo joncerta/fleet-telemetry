@@ -5,7 +5,6 @@ argument-hint: "[servicio] [descripción del caso de uso]"
 context: fork
 agent: backend-engineer
 ---
-<!-- EDITA: convenciones de nombres, forma de errores de dominio y ubicación de tests de integración según tu repo. -->
 
 Crea este caso de uso: **$ARGUMENTS**
 

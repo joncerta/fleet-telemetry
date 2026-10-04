@@ -5,7 +5,6 @@ disable-model-invocation: true
 argument-hint: "[título corto de la corrección]"
 allowed-tools: Read, Write, Edit, Grep, Bash(git log *), Bash(git show *), Bash(git diff *), Bash(git status *)
 ---
-<!-- EDITA: este es el material del punto 3 de entregables. Ajusta el formato si quieres más o menos detalle. -->
  
 Registra en `docs/AI_AUDIT_LOG.md` la corrección: **$ARGUMENTS**
  

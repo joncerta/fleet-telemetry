@@ -1,5 +1,4 @@
 # apps/web — Dashboard (Next.js)
-<!-- EDITA: estilo del mapa, centro inicial y umbrales si cambian. -->
  
 Estas reglas complementan el `CLAUDE.md` de la raíz. El agente que trabaja aquí es `web-engineer`; revisa `/front-review`. Fuera de alcance: cambios en `services/*` (se proponen y esperan aprobación).
  

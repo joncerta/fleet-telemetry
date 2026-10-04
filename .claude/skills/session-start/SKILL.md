@@ -5,7 +5,6 @@ disable-model-invocation: true
 argument-hint: "[objetivo de la sesión, opcional]"
 allowed-tools: Read, Glob, Grep, Bash(git log *), Bash(git status *), Bash(git diff *), Bash(git branch *), Bash(git rev-parse *), Bash(git stash list), Bash(docker compose ps *)
 ---
-<!-- EDITA: lista de agentes y skills si agregas o renombras alguno. -->
 
 Progreso del proyecto:
 !`cat docs/PROGRESS.md 2>/dev/null || echo "(docs/PROGRESS.md no existe todavía)"`

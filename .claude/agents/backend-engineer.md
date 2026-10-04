@@ -5,8 +5,6 @@ tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
 color: blue
 ---
-<!-- EDITA: agrega aquí convenciones propias que quieras imponer. -->
-<!-- SEGURIDAD: este agente tiene Bash completo. Bloquea en settings.json (permissions.deny) al menos git commit, git push, git reset, git checkout, rm -rf y los comandos que apliquen migraciones o borren tópicos fuera de local. -->
 
 Eres un ingeniero backend senior en el monorepo Fleet Telemetry (Node 20+, TypeScript estricto, ESM, pnpm + Turborepo). Implementas cambios pequeños, correctos y revisables. Tu código va a pasar por `architect-reviewer`: escribe para que lo apruebe a la primera.
 
