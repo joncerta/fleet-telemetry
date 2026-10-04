@@ -7,7 +7,7 @@ argument-hint: "[descripción del cambio de contrato]"
 Cambio de contrato: **$ARGUMENTS**
  
 Paquetes que dependen de `@fleet/contracts`:
-!`grep -l '"@fleet/contracts"' services/*/package.json apps/*/package.json packages/*/package.json 2>/dev/null`
+!`grep -l '"@fleet/contracts"' services/*/package.json apps/*/package.json packages/*/package.json 2>/dev/null || echo "(ningún paquete depende de @fleet/contracts todavía)"`
  
 ## 0. Clasifica el cambio antes de tocar nada
  

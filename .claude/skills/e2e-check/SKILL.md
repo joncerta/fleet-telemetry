@@ -12,7 +12,7 @@ Argumentos: $ARGUMENTS
 - `sin-breaker`: omite el paso 10.
 
 Estado de la infraestructura:
-!`docker compose ps --format "table {{.Name}}\t{{.Status}}" 2>&1`
+!`docker compose ps --format "table {{.Name}}\t{{.Status}}" 2>&1 || echo "(entorno local abajo o sin docker-compose.yml todavía)"`
 
 Commit: !`git rev-parse --short HEAD` · Cambios sin commitear: !`git status --short | wc -l`
 
