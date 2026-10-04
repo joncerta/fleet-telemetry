@@ -147,3 +147,38 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Terraform: estado, planes y variables con secretos (.terraform.lock.hcl sí se versiona)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+
+# Expo / React Native: código nativo generado (CNG), firmas y binarios
+.expo/
+apps/mobile/android/
+apps/mobile/ios/
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+*.apk
+*.aab
+
+# Fastlane
+**/fastlane/report.xml
+**/fastlane/Preview.html
+**/fastlane/screenshots
+**/fastlane/test_output
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Claude Code: preferencias locales de cada persona
+.claude/settings.local.json
