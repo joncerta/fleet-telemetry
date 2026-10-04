@@ -21,10 +21,16 @@ Commit: !`git rev-parse --short HEAD` · Cambios sin commitear: !`git status --s
 
 - Lee `packages/contracts/src/telemetry.ts` y `packages/contracts/src/fleet.ts` para construir los payloads válidos y conocer la forma del ACK, el snapshot y los eventos SSE.
 - Define un `RUN_ID` (por ejemplo, `e2e-<timestamp>`) y usa **vehículos propios de esta corrida**: `e2e-<RUN_ID>-v1`, `-v2`, etc. Todas las consultas filtran por esos vehículos y por un rango de tiempo reciente. Nunca cuentes sobre la tabla completa.
+- **Identidad** (regla 4 de CLAUDE.md): el gateway toma el vehículo y el tenant del token de dispositivo; fleet-api y el agente toman el tenant de la sesión.
+  - Por cada vehículo de prueba (`e2e-<RUN_ID>-v1`, `-v2`), crea el vehículo y su token de dispositivo en el tenant A con el comando local que documente `CLAUDE.md`. Los lotes de cada vehículo se envían con su token.
+  - Inicia sesión con el usuario sembrado del tenant A y con el del tenant B, guarda cada cookie en un archivo (`-c <archivo>`) y úsala con `-b <archivo>` en las llamadas a `:4002` y `:4003`.
+  - Si el comando de tokens o los usuarios sembrados no existen, los pasos que dependen de ellos son ❌, con el pendiente para `backend-engineer`.
+- Escribe cada `curl` con la URL justo después de `-s` o `-sN` (`curl -s localhost:4002/...`) y los parámetros de consulta con `-G -d`, para que coincidan con los permisos de `settings.json` y no queden `&` sin comillas.
 - Genera los `eventId` con UUIDs nuevos (`node -e "console.log(crypto.randomUUID())"`).
 - Para esperar, haz **polling** cada 2 s hasta 60 s. Nada de `sleep` fijo. Si vence el timeout, el paso es ❌ con el último valor observado.
-- Consultas SQL de referencia (solo lectura):
-  `docker compose exec -T timescaledb psql -U fleet -d fleet -At -c "<consulta>"`
+- Consultas SQL de referencia, con el usuario de **solo lectura** `fleet_ro` (lo crea una migración del backend; si no existe, repórtalo como pendiente para `backend-engineer` y no uses otro usuario):
+  `docker compose exec -T timescaledb psql -U fleet_ro -d fleet -At -c "<consulta>"`
+- Comandos de Redpanda con `docker compose exec -T redpanda rpk ...` (`topic list`, `topic describe`, `topic consume` con `timeout`).
 
 ## Verificaciones
 
@@ -39,7 +45,7 @@ Commit: !`git rev-parse --short HEAD` · Cambios sin commitear: !`git status --s
 
 **3. Ingesta, ACK e idempotencia** (`POST :4001/v1/telemetry/batch`)
 
-Lote A, para `e2e-<RUN_ID>-v1`: 5 puntos válidos únicos, 1 punto duplicado (mismo `eventId` que uno de los 5) y 1 punto que no cumple el esquema. Coordenadas dentro de Colombia.
+Lote A, para `e2e-<RUN_ID>-v1` y enviado con su token de dispositivo: 5 puntos válidos únicos, 1 punto duplicado (mismo `eventId` que uno de los 5) y 1 punto que no cumple el esquema. Coordenadas dentro de Colombia.
 - Primer envío. Esperado (regla 7 de CLAUDE.md):
   - el ACK lista los 5 `eventId` válidos en `accepted`;
   - el punto inválido aparece en `rejected` con su motivo;
@@ -59,18 +65,19 @@ Lote A, para `e2e-<RUN_ID>-v1`: 5 puntos válidos únicos, 1 punto duplicado (mi
 
 **6. Estado y alertas**
 - Siembra `e2e-<RUN_ID>-v2` detenido dentro de una zona crítica, con puntos que tengan timestamps de hace más de 2 minutos (así no hay que esperar). Si el backend calcula "detenido" con la hora de llegada y no con la del evento, anótalo como hallazgo.
-- `curl -s ":4002/v1/vehicles/stopped?minMinutes=1&zoneKind=critical"`. Esperado: incluye `e2e-<RUN_ID>-v2` y no incluye `e2e-<RUN_ID>-v1`.
-- `curl -s :4002/v1/alerts`. Esperado: hay una alerta para `e2e-<RUN_ID>-v2`, y solo una.
+- `curl -s localhost:4002/v1/vehicles/stopped -G -d minMinutes=1 -d zoneKind=critical -b <cookie-A>`. Esperado: incluye `e2e-<RUN_ID>-v2` y no incluye `e2e-<RUN_ID>-v1`.
+- `curl -s localhost:4002/v1/alerts -b <cookie-A>`. Esperado: hay una alerta para `e2e-<RUN_ID>-v2`, y solo una.
 
 **7. SSE**
-- `timeout 5 curl -sN :4002/v1/stream | head -5`. Esperado: `event: snapshot`.
+- `timeout 5 curl -sN localhost:4002/v1/stream -b <cookie-A> | head -5`. Esperado: `event: snapshot`.
 - Con el stream abierto (`timeout 20 curl -sN ... > /tmp/sse-<RUN_ID>.log &`), envía un punto nuevo de `e2e-<RUN_ID>-v1`. Esperado:
   - llega un evento con ese vehículo y con línea `id:`;
   - aparece al menos un heartbeat en el intervalo configurado.
 
 **8. Multi-tenant**
-- Con credenciales del tenant B (las de prueba que defina CLAUDE.md), consulta vehículos y alertas, abre el SSE y pregunta al agente por `e2e-<RUN_ID>-v2`. Esperado: **ningún** dato de los vehículos del tenant A.
-- Si la autenticación todavía no existe en esta fase, marca ⚠️ no verificado. No lo marques como ✅.
+- Con la cookie del tenant B, consulta vehículos y alertas, abre el SSE y pregunta al agente por `e2e-<RUN_ID>-v2`. Esperado: **ningún** dato de los vehículos del tenant A.
+- Sin cookie, las mismas llamadas a `:4002` y `:4003` responden `401`.
+- Este paso es obligatorio desde el cierre de la fase 1. Si la autenticación no existe o se filtra cualquier dato del tenant A, es ❌.
 
 **9. Agente IA** (`POST :4003/v1/agent/chat`)
 - Pregunta: "¿Qué vehículos llevan detenidos más de 1 minuto en zonas críticas?". Esperado:
@@ -105,6 +112,6 @@ Usa el formato de `qa-verifier`:
 - encabezado con entorno, `RUN_ID`, conteo de ✅/❌/⚠️ y veredicto `LISTO` / `NO LISTO`;
 - una entrada por verificación con comando, esperado y real.
 
-Los pasos 3, 4, 8 y 10 son críticos: un ❌ o un ⚠️ no verificado en cualquiera de ellos da `NO LISTO`, salvo que el ⚠️ sea porque la funcionalidad todavía no existe en esta fase y así lo diga CLAUDE.md.
+Los pasos 3, 4, 8 y 10 son críticos: un ❌ o un ⚠️ no verificado en cualquiera de ellos da `NO LISTO`. En los pasos 3, 4 y 10 se admite un ⚠️ solo si la funcionalidad todavía no existe en esta fase y así lo dice CLAUDE.md. El paso 8 (multi-tenant) no tiene esa excepción.
 
 No corrijas nada. Si algo falla, reporta los logs relevantes (`docker compose logs --tail=50 <servicio>`), la causa probable, el archivo sospechoso y qué agente debería corregirlo.
