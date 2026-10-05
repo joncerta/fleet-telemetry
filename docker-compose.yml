@@ -1,0 +1,94 @@
+# Solo infraestructura (sin perfil). El perfil `app` llega en la fase 4.
+# Nunca `docker compose down -v`: borra el volumen de datos.
+name: fleet-telemetry
+
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg17.11-ts2.30.2
+    # El Cmd por defecto de la imagen es ["postgres"] (Entrypoint /docker-entrypoint.sh): se conserva
+    # y se añade la marca de servidor que exige `db:rollback`. Solo existe en local; Terraform y AWS nunca la definen.
+    command: ["postgres", "-c", "fleet.environment=local"]
+    environment:
+      POSTGRES_DB: fleet
+      POSTGRES_USER: "${POSTGRES_USER:?Falta POSTGRES_USER, copia .env.example a .env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD, copia .env.example a .env}"
+      TIMESCALEDB_TELEMETRY: "off"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # Sin scripts de init: extensiones y roles los crean las migraciones (pnpm db:migrate).
+      - timescaledb-data:/home/postgres/pgdata
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d fleet"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redpanda:
+    image: redpandadata/redpanda:v26.2.3
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=768M
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+    ports:
+      - "127.0.0.1:19092:19092"
+    mem_limit: 1g
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # Crea los tópicos de forma idempotente y queda inactivo (healthy) cuando terminó.
+  # Mantener alineado con la tabla de infra/CLAUDE.md.
+  redpanda-init:
+    image: redpandadata/redpanda:v26.2.3
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -eu
+        B=redpanda:9092
+        DAY=86400000
+        # Propiedad de cluster (dev-container la activa por defecto); idempotente.
+        rpk -X admin.hosts=redpanda:9644 cluster config set auto_create_topics_enabled false
+        create() {
+          # nombre particiones retención_ms
+          if rpk -X brokers=$$B topic describe "$$1" >/dev/null 2>&1; then
+            echo "existe: $$1"
+          else
+            rpk -X brokers=$$B topic create "$$1" -p "$$2" -r 1 -c retention.ms="$$3"
+          fi
+        }
+        create telemetry.raw 3 $$((3 * DAY))
+        create telemetry.dlq 1 $$((14 * DAY))
+        create vehicle.state 3 $$((1 * DAY))
+        create fleet.alerts 3 $$((3 * DAY))
+        rpk -X brokers=$$B topic list
+        # `up --wait` (compose v5.3) falla si un contenedor sale durante la espera,
+        # aun con código 0, y `up` reinicia el init cada vez. Se queda inactivo y healthy.
+        touch /tmp/topics-ready
+        exec sleep infinity
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/topics-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  timescaledb-data:
+  redpanda-data:
