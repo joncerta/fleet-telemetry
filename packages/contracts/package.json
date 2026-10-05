@@ -1,0 +1,30 @@
+{
+  "name": "@fleet/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Esquemas zod 4 compartidos: fuente única de verdad de eventos, DTOs, ACK y SSE.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@fleet/eslint-config": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

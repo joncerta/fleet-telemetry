@@ -1,0 +1,22 @@
+{
+  "name": "@fleet/eslint-config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reglas de ESLint propias del monorepo (límites de capas de Clean Architecture).",
+  "exports": {
+    "./domain-boundaries": "./src/domain-boundaries.js"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  }
+}

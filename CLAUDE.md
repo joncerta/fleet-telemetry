@@ -81,8 +81,11 @@ Un agente LangChain responde preguntas en lenguaje natural usando herramientas t
     - Prohibido `.skip`, `.only`, borrar o debilitar aserciones y regenerar snapshots para que pasen.
 
 ## Migraciones
-- Archivos nuevos en `infra/db/migrations/NNN_<nombre>.sql`, con el siguiente número libre. Nunca se edita una existente.
-- Se aplican con `pnpm db:migrate`. Los scripts de inicio del contenedor solo corren con el volumen vacío: **no** sirven para migraciones nuevas, y `docker compose down -v` está prohibido.
+- Cada migración es un **par reversible**: `infra/db/migrations/NNN_<nombre>.sql` (up) y `NNN_<nombre>.down.sql` (down), con el siguiente número libre.
+  - El runner rechaza un up sin su down.
+  - Nunca se edita un par ya aplicado: el checksum de los dos archivos lo hace fallar.
+- El test de integración del runner hace up → down → up de todas las migraciones y compara el esquema contra un baseline (ver ADR-003 para qué cubre). Un down incompleto lo hace fallar, pero las reglas de negocio de la migración siguen necesitando sus propios tests.
+- Se aplican con `pnpm db:migrate`, se revierten con `pnpm db:rollback` (solo en local) y se consultan con `pnpm db:status`. Los scripts de inicio del contenedor solo corren con el volumen vacío: **no** sirven para migraciones nuevas, y `docker compose down -v` está prohibido.
 
 ## Convenciones
 - TypeScript estricto, ESM (`"type": "module"`), imports con extensión `.js`.
@@ -134,6 +137,8 @@ Skills (`.claude/skills/`):
 - `docker compose --profile app up -d --wait` — sistema completo en contenedores: infraestructura, servicios y web.
 - `pnpm install && pnpm build` — compila todo.
 - `pnpm db:migrate` — aplica migraciones pendientes.
+- `pnpm db:status` — lista las aplicadas y las pendientes; sale con 1 si un archivo aplicado cambió.
+- `pnpm db:rollback [--steps N | --to NNN] [--dry-run]` — revierte la última migración, o hasta la indicada; con `--dry-run` solo muestra el plan. Solo en local.
 - `pnpm dev` — levanta todos los servicios en modo watch (lo corre el humano).
 - `pnpm simulate` — simulador de vehículos.
 - `pnpm typecheck`, `pnpm test`, `pnpm test:integration`, `pnpm test:e2e` — verificación (unitarios, integración y e2e).

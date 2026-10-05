@@ -1,0 +1,26 @@
+{
+  "name": "@fleet/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pruebas e2e contra el stack real (Redpanda + TimescaleDB y, desde la fase 1, los servicios).",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test:e2e": "vitest run"
+  },
+  "dependencies": {
+    "@fleet/platform": "workspace:*"
+  },
+  "devDependencies": {
+    "@fleet/eslint-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "eslint": "catalog:",
+    "kafkajs": "catalog:",
+    "pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

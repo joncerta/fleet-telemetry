@@ -36,7 +36,7 @@ Commit: !`git rev-parse --short HEAD` · Cambios sin commitear: !`git status --s
 **1. Infra**
 - Redpanda y TimescaleDB en `healthy`. Si no, `docker compose up -d` y polling hasta `healthy`.
 - Extensiones `timescaledb` y `postgis` instaladas. Existen los tópicos `telemetry.raw`, `telemetry.dlq`, `vehicle.state` y `fleet.alerts` (`rpk topic list`).
-- No hay migraciones pendientes (según el comando de estado de `pnpm db:migrate`, si existe).
+- No hay migraciones pendientes ni discrepancias: `pnpm db:status` sale con 0 y muestra `Pendientes (0)`.
 
 **2. Servicios**
 - `curl -s localhost:4001/health`, `:4002/health` y `:4003/health` responden OK.

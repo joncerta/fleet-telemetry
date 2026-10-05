@@ -1,0 +1,46 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": ["tsconfig.base.json"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/eslint.config.js", "$TURBO_ROOT$/packages/eslint-config/src/**"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "test:integration": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_ADMIN_URL",
+        "DATABASE_URL",
+        "DATABASE_RO_URL",
+        "FLEET_APP_PASSWORD",
+        "FLEET_RO_PASSWORD",
+        "KAFKA_BROKERS",
+        "LOG_LEVEL"
+      ]
+    },
+    "test:e2e": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_ADMIN_URL",
+        "DATABASE_URL",
+        "DATABASE_RO_URL",
+        "FLEET_APP_PASSWORD",
+        "FLEET_RO_PASSWORD",
+        "KAFKA_BROKERS",
+        "LOG_LEVEL"
+      ]
+    }
+  }
+}
