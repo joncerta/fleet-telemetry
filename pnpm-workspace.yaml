@@ -1,0 +1,25 @@
+packages:
+  - "packages/*"
+  - "services/*"
+  - "apps/*"
+  # Pruebas e2e contra el stack real (tests/e2e/**/*.e2e.test.ts). Es un paquete privado para que
+  # Turborepo le pase las variables de entorno y lo incluya en typecheck y lint.
+  - "tests/e2e"
+
+# Versiones compartidas: cada paquete declara `catalog:` en vez de repetir el rango.
+catalog:
+  "@eslint/js": ^10.0.1
+  "@types/node": ^24.19.1
+  "@types/pg": ^8.23.1
+  eslint: ^10.4.0
+  kafkajs: ^2.2.4
+  pg: ^8.23.1
+  pino: ^10.4.0
+  typescript: ~6.0.3
+  typescript-eslint: ^8.71.0
+  vitest: ^5.0.3
+  zod: ^4.6.5
+
+# pnpm bloquea los scripts de instalación por defecto. esbuild (vía tsx y vitest) valida su binario nativo.
+allowBuilds:
+  esbuild: true
