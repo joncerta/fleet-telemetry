@@ -21,6 +21,9 @@ export const E2E_FLEET_API_PORT = 14002;
 /** Fallos de login por IP y por correo, y de canje de código por IP, que tolera fleet-api en el e2e; los tests los usan para agotarlos. */
 export const E2E_LOGIN_FAILURE_LIMIT_MAX = 5;
 export const E2E_PAIR_FAILURE_LIMIT_MAX = 5;
+/** Latido del SSE de fleet-api en el e2e (el mínimo que admite la configuración) y tope de streams por usuario: los tests del stream los usan. */
+export const E2E_SSE_HEARTBEAT_MS = 1_000;
+export const E2E_SSE_MAX_STREAMS_PER_USER = 3;
 /** Fallos de autenticación (401) por IP y minuto que tolera el gateway del e2e; los tests lo usan para agotarlo. */
 export const E2E_AUTH_FAILURE_LIMIT_MAX = 20;
 const READY_TIMEOUT_MS = 45_000;
@@ -53,17 +56,22 @@ export interface RunningServices {
 }
 
 const E2E_GROUP_PREFIX = "processor-e2e-";
+/** Grupo del consumer del SSE de fleet-api: `fleet-api-sse-<FLEET_API_INSTANCE_ID>`, con la instancia `e2e-<runId>`. */
+const E2E_SSE_GROUP_PREFIX = "fleet-api-sse-e2e-";
 
 const entryOf = (service: ServiceDefinition) => join(REPO_ROOT, service.dir, "dist", "main.js");
 
 /**
- * Borra los grupos `processor-e2e-*` que dejaron corridas anteriores. Solo prospera con los que están vacíos: en
+ * Borra los grupos `processor-e2e-*` y `fleet-api-sse-e2e-*` que dejaron corridas anteriores. Solo prospera con los que están vacíos: en
  * Windows el teardown termina al processor sin que salga del grupo, y esos grupos quedan "Empty" hasta la siguiente
  * corrida. Uno con miembros vivos (otra corrida en curso) lo rechaza el broker, y se ignora.
  */
-export async function deleteStaleE2eGroups(admin: Pick<Admin, "listGroups" | "deleteGroups">, keep: string): Promise<void> {
+export async function deleteStaleE2eGroups(admin: Pick<Admin, "listGroups" | "deleteGroups">, keep: string | readonly string[]): Promise<void> {
+  const kept = new Set(typeof keep === "string" ? [keep] : keep);
   const { groups } = await admin.listGroups();
-  const stale = groups.map((group) => group.groupId).filter((groupId) => groupId.startsWith(E2E_GROUP_PREFIX) && groupId !== keep);
+  const stale = groups
+    .map((group) => group.groupId)
+    .filter((groupId) => (groupId.startsWith(E2E_GROUP_PREFIX) || groupId.startsWith(E2E_SSE_GROUP_PREFIX)) && !kept.has(groupId));
   for (const groupId of stale) await admin.deleteGroups([groupId]).catch(() => undefined);
 }
 
@@ -115,6 +123,10 @@ export function childEnv(runId: string): NodeJS.ProcessEnv {
     FLEET_API_PAIR_FAILURE_LIMIT_MAX: String(E2E_PAIR_FAILURE_LIMIT_MAX),
     FLEET_API_CORS_ORIGINS: "http://localhost:3000",
     FLEET_API_COOKIE_SECURE: "false",
+    // SSE: grupo propio de la corrida (`fleet-api-sse-e2e-<runId>`), latido corto para que los tests lo vean sin esperar y pocos streams por usuario.
+    FLEET_API_INSTANCE_ID: `e2e-${runId}`,
+    SSE_HEARTBEAT_MS: String(E2E_SSE_HEARTBEAT_MS),
+    SSE_MAX_STREAMS_PER_USER: String(E2E_SSE_MAX_STREAMS_PER_USER),
   };
 }
 
@@ -227,6 +239,7 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
 
   const env = childEnv(runId);
   const processorGroup = `${E2E_GROUP_PREFIX}${runId}`;
+  const sseGroup = `${E2E_SSE_GROUP_PREFIX}${runId}`;
   const gatewayUrl = `http://127.0.0.1:${E2E_GATEWAY_PORT}`;
   const fleetApiUrl = `http://127.0.0.1:${E2E_FLEET_API_PORT}`;
 
@@ -250,7 +263,7 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
     process.off("exit", killSync);
     await Promise.all(children.map((child) => stopChild(child).catch(() => undefined)));
     // Limpieza del grupo del e2e: falla si el proceso no llegó a salir limpio (Windows); no importa, es de un solo uso.
-    await admin.deleteGroups([processorGroup]).catch(() => undefined);
+    await admin.deleteGroups([processorGroup, sseGroup]).catch(() => undefined);
     await admin.disconnect().catch(() => undefined);
   };
   // Último recurso si el proceso padre muere sin pasar por el teardown de vitest.
@@ -260,7 +273,7 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
   process.once("exit", killSync);
 
   try {
-    await deleteStaleE2eGroups(admin, processorGroup).catch(() => undefined);
+    await deleteStaleE2eGroups(admin, [processorGroup, sseGroup]).catch(() => undefined);
     await waitFor(
       "GET /health del gateway con 200",
       children,

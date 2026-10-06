@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Read model REST de la flota (resumen, detenidos, alertas, zonas), sesión por cookie y vinculación de dispositivos. El SSE llega en el paso siguiente.",
+  "description": "Read model REST de la flota (resumen, detenidos, alertas, zonas), sesión por cookie, vinculación de dispositivos y stream SSE de la flota.",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
