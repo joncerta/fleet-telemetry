@@ -3,4 +3,5 @@
 export * from "./telemetry.js";
 export * from "./fleet.js";
 export * from "./health.js";
+export * from "./agent.js";
 export * from "./topics.js";
