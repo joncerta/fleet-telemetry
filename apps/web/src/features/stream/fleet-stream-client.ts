@@ -53,6 +53,11 @@ export interface FleetStreamOptions {
   disconnectedAfterFailures?: number;
   /** Registro SIN datos personales: nombre del evento y rutas de los campos inválidos, nunca el payload. */
   log?: LogFn;
+  /**
+   * Dónde escuchar `online` (el navegador recuperó la red): se reconecta ya, sin esperar el backoff. Por defecto `window`; sin él (servidor,
+   * tests en Node) no se escucha nada. El listener se quita en `stop()`.
+   */
+  networkEvents?: Pick<EventTarget, "addEventListener" | "removeEventListener"> | null;
 }
 
 export interface FleetStreamHandle {
@@ -74,7 +79,9 @@ const DEAD_AFTER_HEARTBEATS = 2;
  * - **Reconexión manual con backoff y jitter** ante cualquier error: se cierra el `EventSource` (su reintento propio es a intervalo fijo,
  *   sin jitter) y se reabre con `backoffDelayMs`. Cada reconexión trae un snapshot nuevo, que reemplaza el estado (el servidor ignora
  *   `Last-Event-ID`).
- * - **Conexión muerta.** Sin ninguna señal durante 2 latidos se cierra y se reconecta. OJO: el latido del servidor es un comentario SSE
+ * - **Conexión muerta.** Sin ninguna señal durante 2 latidos se cierra y se reconecta. Si la conexión ya había entregado su snapshot, ese
+ *   primer reintento es SILENCIOSO (el estado sigue "En vivo": en un tenant quieto ocurre cada ~31 s y no debe anunciarse); solo si el
+ *   reintento falla se pasa a "reconectando". OJO: el latido del servidor es un comentario SSE
  *   (`: heartbeat`), que `EventSource` NO entrega a JavaScript; hoy cuentan como señal la apertura y los eventos con nombre.
  * - **401.** Si una conexión falla antes de su snapshot, se consulta la sesión; si no hay, se detiene y avisa `onUnauthorized`.
  */
@@ -83,6 +90,7 @@ export function createFleetStream(options: FleetStreamOptions, callbacks: FleetS
   const backoff = options.backoff ?? STREAM_BACKOFF;
   const disconnectedAfter = options.disconnectedAfterFailures ?? 3;
   const log = options.log ?? (() => undefined);
+  const networkEvents = options.networkEvents === undefined ? (typeof window === "undefined" ? null : window) : options.networkEvents;
 
   let source: EventSourceLike | null = null;
   let started = false;
@@ -158,7 +166,14 @@ export function createFleetStream(options: FleetStreamOptions, callbacks: FleetS
     const armWatchdog = () => {
       clearWatchdog();
       watchdogTimer = setTimeout(() => {
-        if (isCurrent()) fail("sin señal del servidor", !snapshotSeen);
+        if (!isCurrent()) return;
+        if (snapshotSeen) {
+          // Silencioso: reabre ya y deja el estado como está; si la nueva conexión falla, `fail` lo cambia.
+          log("Stream SSE sin señal: reabriendo", { silent: true });
+          connect();
+          return;
+        }
+        fail("sin señal del servidor", true);
       }, DEAD_AFTER_HEARTBEATS * options.heartbeatMs);
     };
 
@@ -223,17 +238,21 @@ export function createFleetStream(options: FleetStreamOptions, callbacks: FleetS
     });
   }
 
+  const onOnline = () => handle.reconnectNow();
+
   function stop(): void {
     if (stopped) return;
     stopped = true;
+    networkEvents?.removeEventListener("online", onOnline);
     clearTimeout(reconnectTimer);
     closeSource();
   }
 
-  return {
+  const handle: FleetStreamHandle = {
     start() {
       if (started || stopped) return;
       started = true;
+      networkEvents?.addEventListener("online", onOnline);
       connect();
     },
     stop,
@@ -242,4 +261,5 @@ export function createFleetStream(options: FleetStreamOptions, callbacks: FleetS
       connect();
     },
   };
+  return handle;
 }

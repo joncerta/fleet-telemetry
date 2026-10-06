@@ -7,7 +7,21 @@ import { createFleetStream, type ConnectionStatus, type FleetStreamCallbacks, ty
 const HEARTBEAT_MS = 15_000;
 const URL = "http://localhost:4002/v1/stream";
 
+/** `window` falso: guarda los listeners de `online` para dispararlos a mano. */
+function fakeNetwork() {
+  const listeners = new Set<() => void>();
+  return {
+    listeners,
+    target: {
+      addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => listeners.add(listener as () => void),
+      removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => listeners.delete(listener as () => void),
+    },
+    goOnline: () => [...listeners].forEach((listener) => listener()),
+  };
+}
+
 function setup(options: { probe?: SessionProbe; random?: () => number } = {}) {
+  const network = fakeNetwork();
   const sources = fakeEventSources();
   const statuses: ConnectionStatus[] = [];
   const logs: { message: string; details: unknown }[] = [];
@@ -26,11 +40,12 @@ function setup(options: { probe?: SessionProbe; random?: () => number } = {}) {
       probeSession: probe,
       heartbeatMs: HEARTBEAT_MS,
       random: options.random ?? (() => 0),
+      networkEvents: network.target,
       log: (message, details) => logs.push({ message, details }),
     },
     callbacks,
   );
-  return { sources, statuses, logs, callbacks, probe, stream };
+  return { sources, statuses, logs, callbacks, probe, stream, network };
 }
 
 beforeEach(() => {
@@ -141,16 +156,18 @@ describe("createFleetStream", () => {
   });
 
   it("si falla antes del snapshot con sesión vigente, reintenta con espera creciente y pasa a 'disconnected' a los 3 fallos", async () => {
-    // random = 1: la espera es el tope de cada intento (1 s, 2 s, 4 s...).
+    // random ~ 1: la espera es el tope de cada intento (2 s, 4 s, 8 s...).
     const { sources, statuses, stream } = setup({ random: () => 0.999_999 });
     stream.start();
 
     sources.latest().fail();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(sources.created).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(sources.created).toHaveLength(2);
 
     sources.latest().fail();
-    await vi.advanceTimersByTimeAsync(1_999);
+    await vi.advanceTimersByTimeAsync(3_999);
     expect(sources.created).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(sources.created).toHaveLength(3);
@@ -158,11 +175,25 @@ describe("createFleetStream", () => {
     sources.latest().fail();
     await vi.advanceTimersByTimeAsync(0);
     expect(statuses.at(-1)).toBe("disconnected");
-    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     expect(sources.created).toHaveLength(4);
   });
 
-  it("sin ninguna señal durante 2 latidos, da la conexión por muerta y reconecta", async () => {
+  it("el primer reintento tiene jitter: con random bajo espera 1 s y con random alto cerca de 2 s", async () => {
+    for (const [random, wait] of [[0, 1_000], [0.999_999, 2_000]] as const) {
+      const { sources, stream } = setup({ random: () => random });
+      stream.start();
+      sources.latest().emit(SSE_EVENTS.snapshot, snapshot());
+      sources.latest().fail();
+      await vi.advanceTimersByTimeAsync(wait - 1);
+      expect(sources.created).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sources.created).toHaveLength(2);
+      stream.stop();
+    }
+  });
+
+  it("sin ninguna señal durante 2 latidos, da la conexión por muerta y reabre en silencio: sigue 'En vivo' hasta que el reintento falle", async () => {
     const { sources, statuses, stream } = setup();
     stream.start();
     const first = sources.latest();
@@ -177,9 +208,50 @@ describe("createFleetStream", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     expect(first.closed).toBe(true);
-    expect(statuses.at(-1)).toBe("reconnecting");
-    await vi.advanceTimersByTimeAsync(1_000);
+    // Reabre ya, sin esperar y sin pasar por "reconectando" (en un tenant quieto ocurre cada ~31 s).
     expect(sources.created).toHaveLength(2);
+    expect(statuses).not.toContain("reconnecting");
+    expect(statuses.at(-1)).toBe("live");
+
+    // El snapshot de la conexión nueva la deja viva.
+    sources.latest().emit(SSE_EVENTS.snapshot, snapshot());
+    expect(statuses).not.toContain("reconnecting");
+  });
+
+  it("si el reintento silencioso también falla, ahí sí pasa a 'reconectando'", async () => {
+    const { sources, statuses, stream } = setup();
+    stream.start();
+    sources.latest().emit(SSE_EVENTS.snapshot, snapshot());
+    await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_MS);
+    expect(sources.created).toHaveLength(2);
+    expect(statuses.at(-1)).toBe("live");
+
+    sources.latest().fail();
+    expect(statuses.at(-1)).toBe("reconnecting");
+  });
+
+  it("si el reintento silencioso nunca recibe snapshot, tras otros 2 latidos pasa a 'reconectando'", async () => {
+    const { sources, statuses, stream } = setup();
+    stream.start();
+    sources.latest().emit(SSE_EVENTS.snapshot, snapshot());
+    await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_MS);
+    await vi.advanceTimersByTimeAsync(2 * HEARTBEAT_MS);
+    expect(statuses.at(-1)).toBe("reconnecting");
+  });
+
+  it("el evento 'online' reconecta ya, sin esperar el backoff, y se deja de escuchar al detener", () => {
+    const { sources, stream, network } = setup({ random: () => 0.999_999 });
+    stream.start();
+    expect(network.listeners.size).toBe(1);
+    sources.latest().emit(SSE_EVENTS.snapshot, snapshot());
+    sources.latest().fail();
+    expect(sources.created).toHaveLength(1);
+
+    network.goOnline();
+    expect(sources.created).toHaveLength(2);
+
+    stream.stop();
+    expect(network.listeners.size).toBe(0);
   });
 
   it("una conexión que nunca abre también se da por muerta", async () => {

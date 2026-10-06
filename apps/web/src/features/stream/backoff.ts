@@ -9,12 +9,12 @@ export interface BackoffPolicy {
 export const STREAM_BACKOFF: BackoffPolicy = { initialMs: 1_000, maxMs: 30_000 };
 
 /**
- * Espera antes del intento `attempt` (0 = el primero tras un corte): exponencial con jitter "igual" (entre la mitad y el total del
- * tope del intento) y nunca menos que `initialMs`. El jitter reparte en el tiempo las reconexiones de cientos de pestañas cuando
- * fleet-api vuelve, en vez de que todas golpeen a la vez. `random` devuelve [0, 1).
+ * Espera antes del intento `attempt` (0 = el primero tras un corte): exponencial con jitter COMPLETO entre `initialMs` y un tope que se
+ * duplica por intento (`min(maxMs, initialMs * 2^(attempt + 1))`: intento 0 en [1 s, 2 s], intento 1 en [1 s, 4 s]...). Con el jitter
+ * desde el primer intento, las pestañas no reconectan todas a la vez cuando una réplica de fleet-api se reinicia. `random` devuelve [0, 1).
  */
 export function backoffDelayMs(attempt: number, random: () => number, policy: BackoffPolicy = STREAM_BACKOFF): number {
-  const cap = Math.min(policy.maxMs, policy.initialMs * 2 ** Math.max(0, attempt));
-  const delay = cap / 2 + random() * (cap / 2);
+  const cap = Math.min(policy.maxMs, policy.initialMs * 2 ** (Math.max(0, attempt) + 1));
+  const delay = policy.initialMs + random() * (cap - policy.initialMs);
   return Math.round(Math.min(policy.maxMs, Math.max(policy.initialMs, delay)));
 }
