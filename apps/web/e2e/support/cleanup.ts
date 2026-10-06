@@ -5,6 +5,25 @@ import type { E2eEnv } from "./env";
 /** Las placas que crea el e2e: `E2E` + 8 hex en mayúsculas. Nada más se borra jamás, aunque alguien pase otra placa. */
 export const E2E_PLATE_PATTERN = /^E2E[0-9A-F]{8}$/;
 
+/** Los nombres de zona que crea el e2e: `E2E Zona ` + 8 hex en minúsculas. Nada más se borra jamás. */
+export const E2E_ZONE_NAME_PATTERN = /^E2E Zona [0-9a-f]{8}$/;
+
+/** Nombre de zona único por corrida (el e2e se repite sobre una base con historial y el nombre es único por flota). */
+export const uniqueE2eZoneName = (hex: string): string => `E2E Zona ${hex.toLowerCase()}`;
+
+/** Borra las zonas creadas por un test (por nombre). Solo la base local y solo nombres con la forma `E2E Zona …`; SQL parametrizado. */
+export async function deleteE2eZones(env: E2eEnv, names: readonly string[]): Promise<void> {
+  const safe = names.filter((name) => E2E_ZONE_NAME_PATTERN.test(name));
+  if (safe.length === 0) return;
+  const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 1 });
+  try {
+    await assertLocalDatabase({ url: env.DATABASE_URL, variable: "DATABASE_URL", command: "test:e2e (web)", db: pool });
+    await pool.query("DELETE FROM zones WHERE name = ANY($1::text[])", [safe]);
+  } finally {
+    await pool.end();
+  }
+}
+
 /** Placa única por corrida (alfanumérica, sin guion): el e2e se repite sobre una base con historial. */
 export const uniqueE2ePlate = (hex: string): string => `E2E${hex.toUpperCase()}`;
 
