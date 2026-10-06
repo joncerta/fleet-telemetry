@@ -1,0 +1,38 @@
+# Iniciar turno con los permisos ya concedidos: el tracking pasa a activo y el turno se puede terminar.
+# Uso: maestro test -e TOKEN=fdt_... -e VEHICLE_ID=<uuid> apps/mobile/.maestro/02-iniciar-turno.yaml
+appId: co.fleet.driver
+env:
+  DEV_CLIENT_URL: "fleetdriver://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081"
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    permissions:
+      all: allow
+- runFlow: subflows/open-dev-client.yaml
+- runFlow: subflows/pair.yaml
+- assertVisible:
+    id: "tracking-state"
+    text: "Tracking pausado"
+- tapOn:
+    id: "start-shift"
+- extendedWaitUntil:
+    visible:
+      id: "stop-shift"
+    timeout: 15000
+- assertVisible:
+    id: "tracking-state"
+    text: "Tracking activo"
+- assertVisible:
+    id: "shift-title"
+    text: "Turno activo"
+# Terminar el turno apaga el tracking (nunca queda encendido "por si acaso").
+- tapOn:
+    id: "stop-shift"
+- extendedWaitUntil:
+    visible:
+      id: "start-shift"
+    timeout: 15000
+- assertVisible:
+    id: "tracking-state"
+    text: "Tracking pausado"
