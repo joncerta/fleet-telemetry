@@ -1,10 +1,11 @@
 import { NORTE_USER } from "./support/env";
-import { connectionStatus, expect, login, NORTE_LIVE, sendUntilShown, test, vehicleItem } from "./support/fixtures";
+import { connectionStatus, expect, login, NORTE_LIVE, openPanel, sendUntilShown, test, vehicleItem } from "./support/fixtures";
 
 test("al reiniciar fleet-api, el dashboard se reconecta solo y recupera el estado", async ({ page, env, fleet, stack }) => {
   await fleet.send(NORTE_LIVE, { speedMps: 10 });
   await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
   await expect(connectionStatus(page)).toContainText("En vivo");
+  await openPanel(page, "Vehículos");
   await sendUntilShown(page, fleet, NORTE_LIVE, { speedMps: 10 }, "36 km/h");
 
   const restarting = stack.restartFleetApi();

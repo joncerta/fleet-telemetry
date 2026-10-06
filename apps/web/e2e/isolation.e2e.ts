@@ -7,6 +7,7 @@ import {
   login,
   NORTE_ISOLATION,
   openIsolatedPage,
+  openPanel,
   sendUntilShown,
   SUR_LIVE,
   test,
@@ -36,6 +37,8 @@ test("aislamiento: Norte y Sur logueados a la vez; lo de Norte llega a Norte y n
     await login(sur.page, SUR_USER, env.SEED_USER_PASSWORD);
     await expect(connectionStatus(norte.page)).toContainText("En vivo");
     await expect(connectionStatus(sur.page)).toContainText("En vivo");
+    await openPanel(norte.page, "Vehículos");
+    await openPanel(sur.page, "Vehículos");
 
     // Prueba positiva 1: Sur sí recibe lo suyo por el stream (su conexión funciona, así que un "0 de Norte" significa algo).
     await sendUntilShown(sur.page, fleet, SUR_LIVE, { speedMps: 10 }, "36 km/h");
@@ -84,6 +87,7 @@ test("sesión compartida entre pestañas: si en otra pestaña (misma cookie) ent
     const old = shared.page;
     await login(old, NORTE_USER, env.SEED_USER_PASSWORD);
     await expect(connectionStatus(old)).toContainText("En vivo");
+    await openPanel(old, "Vehículos");
     await expect(vehicleItem(old, NORTE_ISOLATION)).toBeVisible();
 
     // Otra pestaña del MISMO contexto (misma cookie): cierra sesión y entra el usuario de Sur.

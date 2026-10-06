@@ -4,6 +4,7 @@ import {
   connectionStatus,
   expect,
   login,
+  openPanel,
   NORTE_ALERT,
   NORTE_LIVE,
   sendUntilShown,
@@ -19,6 +20,7 @@ test.describe("dashboard en vivo (Flota Norte)", () => {
     await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
 
     await expect(connectionStatus(page)).toContainText("En vivo");
+    await openPanel(page, "Vehículos");
     // El mapa cargó (estilo y WebGL: la leyenda solo aparece con el mapa listo) y dibujó la capa de vehículos (la procesa el worker de
     // MapLibre: si el worker no arranca, la capa nunca termina de cargar).
     const map = page.getByRole("main", { name: "Mapa" });
@@ -53,6 +55,7 @@ test.describe("dashboard en vivo (Flota Norte)", () => {
     await fleet.send(NORTE_ALERT, { mocked: false, speedMps: 5 });
     await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
     await expect(connectionStatus(page)).toContainText("En vivo");
+    await openPanel(page, "Vehículos");
     // La tubería en vivo ya entrega eventos de este vehículo.
     await sendUntilShown(page, fleet, NORTE_ALERT, { mocked: false, speedMps: 7.5 }, "27 km/h");
 

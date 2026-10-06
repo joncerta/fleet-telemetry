@@ -50,9 +50,11 @@ export function KpiPanel() {
   const summary = useFleet((state) => state.summary);
   return (
     <Panel
-      id="kpi-heading"
+      id="kpi"
       title="Resumen de la flota"
-      aside={summary.updatedAt !== null && <span className="text-xs text-ink-muted">Actualizado {formatTime(summary.updatedAt)}</span>}
+      defaultOpen
+      count={summary.data === null ? undefined : `${formatInteger(summary.data.vehicles.total)} vehículos`}
+      aside={summary.updatedAt !== null && `Actualizado ${formatTime(summary.updatedAt)}`}
     >
       <KpiGrid summary={summary} />
     </Panel>

@@ -76,7 +76,12 @@ export function StoppedPanel() {
   const select = useCallback((vehicleId: string) => fleetStore.getState().selectVehicle(vehicleId), [fleetStore]);
 
   return (
-    <Panel id="stopped-heading" title={`Detenidos +${STOPPED_QUERY.minMinutes} min en zonas críticas`}>
+    <Panel
+      id="stopped"
+      title={`Detenidos +${STOPPED_QUERY.minMinutes} min en zonas críticas`}
+      defaultOpen={false}
+      count={stopped.data === null ? undefined : rows.length}
+    >
       <StoppedBody stopped={stopped} rows={rows} onSelect={select} />
     </Panel>
   );
