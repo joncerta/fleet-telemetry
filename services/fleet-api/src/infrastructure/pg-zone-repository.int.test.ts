@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ZoneCreateRequest } from "@fleet/contracts";
+import { ZONE_MAX_PER_TENANT, zoneCreateRequestSchema, type ZoneCreateRequest } from "@fleet/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIntegrationDatabase, createSeeder, type IntegrationDatabase, type Seeder } from "../testing/integration-db.js";
 import { createPgFleetReadRepository } from "./pg-fleet-read-repository.js";
@@ -40,9 +40,13 @@ const BOW_TIE: [number, number][] = [
   [-74.08, 4.7],
 ];
 
-const input = (tenantId: string, overrides: Partial<{ zoneId: string; name: string; kind: "critical" | "depot" | "customer" }> = {}) => ({
+const input = (
+  tenantId: string,
+  overrides: Partial<{ zoneId: string; name: string; kind: "critical" | "depot" | "customer"; maxPerTenant: number }> = {},
+) => ({
   tenantId,
   zoneId: overrides.zoneId ?? randomUUID(),
+  maxPerTenant: overrides.maxPerTenant ?? ZONE_MAX_PER_TENANT,
   name: overrides.name ?? `Zona ${randomUUID()}`,
   kind: overrides.kind ?? "critical",
   geometry: geometry(),
@@ -123,6 +127,124 @@ describe("createPgZoneRepository.create", () => {
     expect(result.status).toBe("created");
     await expect(db.pool.query("SELECT 1 FROM zones LIMIT 1")).resolves.toBeDefined();
     expect((await reader().findZones(tenantId)).features.map((feature) => feature.properties.name)).toEqual([name]);
+  });
+});
+
+describe("createPgZoneRepository.create: tope de zonas por tenant", () => {
+  it("al alcanzar el máximo responde limit_reached y no inserta; otro tenant no se ve afectado", async () => {
+    const [a, b] = [await seed.tenant(), await seed.tenant()];
+    for (const n of [1, 2, 3]) expect((await zones().create(input(a, { name: `Z${n}`, maxPerTenant: 3 }))).status).toBe("created");
+
+    const fourth = await zones().create(input(a, { name: "Z4", maxPerTenant: 3 }));
+
+    expect(fourth).toEqual({ status: "limit_reached" });
+    const count = await db.pool.query<{ n: string }>("SELECT count(*) AS n FROM zones WHERE tenant_id = $1", [a]);
+    expect(Number(count.rows[0]?.n)).toBe(3);
+    expect((await zones().create(input(b, { name: "Z1", maxPerTenant: 3 }))).status).toBe("created");
+  });
+
+  it("con el tenant lleno, un nombre repetido sigue siendo name_taken (tiene prioridad sobre el tope)", async () => {
+    const tenantId = await seed.tenant();
+    await zones().create(input(tenantId, { name: "Uno", maxPerTenant: 1 }));
+
+    expect(await zones().create(input(tenantId, { name: "Uno", maxPerTenant: 1 }))).toEqual({ status: "name_taken" });
+    expect(await zones().create(input(tenantId, { name: "Dos", maxPerTenant: 1 }))).toEqual({ status: "limit_reached" });
+  });
+
+  it("altas simultáneas con un tope de 3: se crean exactamente 3 (el lock del tenant serializa el conteo)", async () => {
+    const tenantId = await seed.tenant();
+
+    const results = await Promise.all(Array.from({ length: 8 }, (_, i) => zones().create(input(tenantId, { name: `Carrera ${i}`, maxPerTenant: 3 }))));
+
+    expect(results.filter((result) => result.status === "created")).toHaveLength(3);
+    expect(results.filter((result) => result.status === "limit_reached")).toHaveLength(5);
+    const count = await db.pool.query<{ n: string }>("SELECT count(*) AS n FROM zones WHERE tenant_id = $1", [tenantId]);
+    expect(Number(count.rows[0]?.n)).toBe(3);
+  });
+
+  it("no deja conexiones del pool tomadas tras un limit_reached, un name_taken ni un invalid_geometry", async () => {
+    const tenantId = await seed.tenant();
+    await zones().create(input(tenantId, { name: "Unica", maxPerTenant: 1 }));
+    await zones().create(input(tenantId, { name: "Otra", maxPerTenant: 1 }));
+    await zones().create(input(tenantId, { name: "Unica", maxPerTenant: 1 }));
+    await zones().create({ ...input(await seed.tenant(), { name: "Moño" }), geometry: geometry(BOW_TIE) });
+
+    expect(db.pool.idleCount).toBe(db.pool.totalCount);
+    expect(db.pool.waitingCount).toBe(0);
+  });
+});
+
+describe("createPgZoneRepository.create: nombres Unicode", () => {
+  const parsed = (name: string) =>
+    zoneCreateRequestSchema.parse({ name, kind: "critical", geometry: { type: "Polygon", coordinates: [ring] } });
+
+  it("'Depósito' en NFC y en NFD es la misma zona: la segunda es name_taken", async () => {
+    const tenantId = await seed.tenant();
+    const nfc = "Depósito".normalize("NFC");
+    const nfd = nfc.normalize("NFD");
+    expect(nfd).not.toBe(nfc);
+    const first = parsed(nfc);
+    const second = parsed(nfd);
+
+    const created = await zones().create({ tenantId, zoneId: randomUUID(), maxPerTenant: ZONE_MAX_PER_TENANT, ...first });
+    const duplicate = await zones().create({ tenantId, zoneId: randomUUID(), maxPerTenant: ZONE_MAX_PER_TENANT, ...second });
+
+    expect(created.status).toBe("created");
+    expect(duplicate).toEqual({ status: "name_taken" });
+  });
+});
+
+describe("createPgZoneRepository.create: geometrías contra PostGIS", () => {
+  it.each([
+    ["un anillo colineal de área cero", [[-74.08, 4.7], [-74.07, 4.7], [-74.06, 4.7], [-74.08, 4.7]]],
+    ["una espiga A,B,C,B,A", [[-74.08, 4.7], [-74.07, 4.7], [-74.06, 4.7], [-74.07, 4.7], [-74.08, 4.7]]],
+  ] as [string, [number, number][]][])("%s es invalid_geometry y no inserta", async (_label, coordinates) => {
+    const tenantId = await seed.tenant();
+
+    const result = await zones().create({ ...input(tenantId, { name: "Degenerada" }), geometry: geometry(coordinates) });
+
+    expect(result).toEqual({ status: "invalid_geometry" });
+    const count = await db.pool.query<{ n: string }>("SELECT count(*) AS n FROM zones WHERE tenant_id = $1", [tenantId]);
+    expect(Number(count.rows[0]?.n)).toBe(0);
+  });
+
+  it("un vértice duplicado consecutivo es válido: se crea y contiene un punto interior (ST_Covers)", async () => {
+    const tenantId = await seed.tenant();
+    const zoneId = randomUUID();
+    const withDuplicate: [number, number][] = [ring[0], ring[1], ring[1], ring[2], ring[3], ring[4]] as [number, number][];
+
+    const result = await zones().create({ ...input(tenantId, { zoneId, name: "Duplicado" }), geometry: geometry(withDuplicate) });
+
+    expect(result.status).toBe("created");
+    const covers = await db.pool.query<{ covers: boolean }>("SELECT ST_Covers(geom, ST_SetSRID(ST_MakePoint($2, $3), 4326)) AS covers FROM zones WHERE zone_id = $1", [
+      zoneId,
+      -74.075,
+      4.705,
+    ]);
+    expect(covers.rows[0]?.covers).toBe(true);
+  });
+
+  it("un crs o bbox extra en la geometría se descarta en el borde y la zona se guarda con SRID 4326", async () => {
+    const tenantId = await seed.tenant();
+    const zoneId = randomUUID();
+    const request = zoneCreateRequestSchema.parse({
+      name: "Con crs",
+      kind: "depot",
+      geometry: {
+        type: "Polygon",
+        coordinates: [ring],
+        bbox: [-74.08, 4.7, -74.07, 4.71],
+        crs: { type: "name", properties: { name: "urn:ogc:def:crs:EPSG::3857" } },
+      },
+    });
+    expect(Object.keys(request.geometry).sort()).toEqual(["coordinates", "type"]);
+
+    const result = await zones().create({ tenantId, zoneId, maxPerTenant: ZONE_MAX_PER_TENANT, ...request });
+
+    expect(result.status).toBe("created");
+    if (result.status === "created") expect(Object.keys(result.zone.geometry).sort()).toEqual(["coordinates", "type"]);
+    const stored = await db.pool.query<{ srid: number }>("SELECT ST_SRID(geom) AS srid FROM zones WHERE zone_id = $1", [zoneId]);
+    expect(stored.rows[0]?.srid).toBe(4326);
   });
 });
 

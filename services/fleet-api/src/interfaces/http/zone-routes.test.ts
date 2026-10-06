@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { apiErrorSchema, zoneFeatureSchema, ZONE_MAX_VERTICES } from "@fleet/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { InvalidZoneGeometryError, ZoneNameTakenError } from "../../application/errors.js";
+import { InvalidZoneGeometryError, ZoneLimitReachedError, ZoneNameTakenError } from "../../application/errors.js";
 import { CREATED_ZONE, makeTestApp, NORTE, type TestAppOptions } from "../../testing/test-app.js";
 import type { FleetApiApp } from "./build-app.js";
 
@@ -75,6 +75,30 @@ describe("POST /v1/zones", () => {
     expect(raw()).not.toContain("Nombre Secreto");
   });
 
+  it("un tenant con el máximo de zonas responde 409 zone_limit_reached", async () => {
+    const { app, sessionCookieOf } = await makeApp({ useCases: { createZone: () => Promise.reject(new ZoneLimitReachedError()) } });
+
+    const response = await post(app, valid(), sessionCookieOf(NORTE));
+
+    expect(response.statusCode).toBe(409);
+    expect(apiErrorSchema.parse(response.json()).error.code).toBe("zone_limit_reached");
+  });
+
+  it("200 vértices en precisión double completa caben en el límite de cuerpo (16 KiB): responde 201, no 413", async () => {
+    const { app, useCases, sessionCookieOf } = await makeApp();
+    const points = Array.from({ length: ZONE_MAX_VERTICES }, (_, i) => {
+      const angle = (2 * Math.PI * i) / ZONE_MAX_VERTICES;
+      return [-74.01234567890123 + 0.0512345678901234 * Math.cos(angle), 4.712345678901234 + 0.0512345678901234 * Math.sin(angle)];
+    });
+    const payload = valid({ geometry: { type: "Polygon", coordinates: [[...points, points[0]]] } });
+    expect(JSON.stringify(payload).length).toBeGreaterThan(7_000);
+
+    const response = await post(app, payload, sessionCookieOf(NORTE));
+
+    expect(response.statusCode).toBe(201);
+    expect(useCases.createZone).toHaveBeenCalledOnce();
+  });
+
   it("un polígono que PostGIS rechaza responde 400 invalid_geometry, sin 500", async () => {
     const { app, sessionCookieOf } = await makeApp({ useCases: { createZone: () => Promise.reject(new InvalidZoneGeometryError()) } });
 
@@ -109,6 +133,7 @@ describe("POST /v1/zones", () => {
     ["nombre largo", valid({ name: "a".repeat(81) })],
     ["nombre con NUL", valid({ name: `a${String.fromCharCode(0)}b` })],
     ["nombre con bidi", valid({ name: `${String.fromCharCode(0x202e)}abc` })],
+    ["nombre solo de U+200B", valid({ name: String.fromCharCode(0x200b).repeat(3) })],
   ])("un cuerpo inválido (%s) responde 400 invalid_request sin llegar al caso de uso", async (_label, payload) => {
     const { app, useCases, sessionCookieOf } = await makeApp();
 

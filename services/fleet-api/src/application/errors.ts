@@ -40,6 +40,14 @@ export class ZoneNameTakenError extends Error {
   }
 }
 
+/** El tenant ya tiene el máximo de zonas (`ZONE_MAX_PER_TENANT`). */
+export class ZoneLimitReachedError extends Error {
+  constructor() {
+    super("El tenant alcanzó el máximo de zonas.");
+    this.name = "ZoneLimitReachedError";
+  }
+}
+
 /** PostGIS considera inválido el polígono (por ejemplo, con auto-intersección). */
 export class InvalidZoneGeometryError extends Error {
   constructor() {

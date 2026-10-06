@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { TOPICS } from "@fleet/contracts";
+import { TOPICS, ZONE_MAX_PER_TENANT } from "@fleet/contracts";
 import { createConsumer, createKafka, createLogger, createPool, createSessionCodec, hashPassword, installGracefulShutdown, sha256Hex, verifyPassword } from "@fleet/platform";
 import { createCheckHealth } from "./application/check-health.js";
 import { createFleetEventHub } from "./application/fleet-event-hub.js";
@@ -130,7 +130,7 @@ const app = await buildApp({
     });
     registerZoneRoutes(instance, {
       cookies: sessionCookies,
-      createZone: createCreateZone({ zones: createPgZoneRepository(pool), newZoneId: randomUUID }),
+      createZone: createCreateZone({ zones: createPgZoneRepository(pool), newZoneId: randomUUID, maxPerTenant: ZONE_MAX_PER_TENANT }),
       createRateLimit: { max: config.FLEET_API_ZONE_CREATE_RATE_LIMIT_MAX, timeWindowMs: config.FLEET_API_ZONE_CREATE_RATE_LIMIT_WINDOW_MS },
     });
     registerStreamRoute(instance, {
