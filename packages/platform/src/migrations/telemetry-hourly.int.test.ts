@@ -195,14 +195,16 @@ describe("telemetry_hourly (009)", () => {
       `SELECT j.proc_name, j.schedule_interval::text AS schedule_interval, j.config->>'start_offset' AS start_offset,
               j.config->>'end_offset' AS end_offset, j.config->>'drop_after' AS drop_after
        FROM timescaledb_information.jobs j
-       JOIN timescaledb_information.continuous_aggregates ca ON ca.materialization_hypertable_name = j.hypertable_name
+       JOIN timescaledb_information.continuous_aggregates ca
+         -- Según la versión, jobs nombra la política de un agregado por su vista o por su hypertable materializada.
+         ON (j.hypertable_schema, j.hypertable_name) IN ((ca.view_schema, ca.view_name), (ca.materialization_hypertable_schema, ca.materialization_hypertable_name))
        WHERE ca.view_name = 'telemetry_hourly' ORDER BY j.proc_name`,
     );
 
     const refreshJob = rows.find((r) => r.proc_name === "policy_refresh_continuous_aggregate");
-    expect(refreshJob).toMatchObject({ schedule_interval: "00:15:00", start_offset: "8 days", end_offset: "01:00:00" });
+    expect(refreshJob, JSON.stringify(rows)).toMatchObject({ schedule_interval: "00:15:00", start_offset: "8 days", end_offset: "01:00:00" });
     const retentionJob = rows.find((r) => r.proc_name === "policy_retention");
-    expect(retentionJob?.drop_after).toBe("90 days");
+    expect(retentionJob?.drop_after, JSON.stringify(rows)).toBe("90 days");
     const { rows: intervals } = await admin.query<{ covers: boolean }>("SELECT interval '8 days' > interval '7 days' AS covers");
     expect(intervals[0]?.covers).toBe(true);
   });
