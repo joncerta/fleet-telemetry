@@ -137,7 +137,7 @@ export async function openPanel(page: Page, title: string): Promise<void> {
 
 /** Abre los seis paneles de la columna lateral y el historial de alertas (si existe): para aserciones negativas que deben mirar TODO lo montable. */
 export async function expandAll(page: Page): Promise<void> {
-  for (const title of ["Resumen de la flota", "Alertas en vivo", "Detenidos", "Vehículos", "Vincular dispositivo", "Usuarios"]) await openPanel(page, title);
+  for (const title of ["Resumen de la flota", "Alertas en vivo", "Detenidos", "Vehículos", "Vincular dispositivo", "Usuarios", "Zonas"]) await openPanel(page, title);
   const history = page.getByRole("button", { name: /^Historial/ });
   if ((await history.count()) > 0 && (await history.getAttribute("aria-expanded")) === "false") await history.click();
 }

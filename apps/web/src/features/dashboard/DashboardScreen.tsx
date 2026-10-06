@@ -10,6 +10,7 @@ import { PairingPanel } from "../pairing/PairingPanel";
 import { StoppedPanel } from "../stopped/StoppedPanel";
 import { KpiPanel } from "../summary/KpiPanel";
 import { UsersPanel } from "../users/UsersPanel";
+import { ZonesPanel } from "../zones/ZonesPanel";
 import { VehiclesPanel } from "../vehicles/VehiclesPanel";
 import { DashboardHeader } from "./DashboardHeader";
 
@@ -40,6 +41,7 @@ function Dashboard() {
           <AlertsPanel />
           <StoppedPanel />
           <VehiclesPanel />
+          <ZonesPanel />
           <PairingPanel />
           <UsersPanel />
         </aside>
