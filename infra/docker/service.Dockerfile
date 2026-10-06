@@ -25,10 +25,13 @@ WORKDIR /repo
 
 # --- build: instala el workspace completo, compila el paquete y sus dependencias, y lo empaqueta en /out ---
 FROM base AS build
-ARG SERVICE=platform
 COPY . .
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile
+# El ARG va DESPUÉS de la instalación: todo RUN posterior a un ARG lo recibe como variable de entorno y su valor entra en la
+# clave de caché. Antes del install, cada imagen repetía la instalación completa del workspace en una capa propia (una copia
+# de node_modules por imagen), y en CI el runner se quedaba sin disco. Así la capa del install es una sola y la comparten todas las imágenes.
+ARG SERVICE=platform
 # `...` incluye las dependencias de workspace del paquete (contracts, platform).
 RUN pnpm --filter "@fleet/${SERVICE}..." run build
 # `deploy` copia todo el paquete; en runtime solo hacen falta dist/ y node_modules/ (sin fuentes, tests ni configs).
