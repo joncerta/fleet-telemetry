@@ -15,3 +15,11 @@ export class AgentFailedError extends Error {
     this.name = "AgentFailedError";
   }
 }
+
+/** El cliente cerró la conexión (por ejemplo, la pestaña) antes de que terminara la pregunta: se cancela la corrida para no seguir pagando el modelo. */
+export class AgentCancelledError extends Error {
+  constructor() {
+    super("La pregunta se canceló porque el cliente cerró la conexión.");
+    this.name = "AgentCancelledError";
+  }
+}

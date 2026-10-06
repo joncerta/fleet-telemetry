@@ -28,6 +28,8 @@ export const CHAT_RESPONSE: ChatResponse = {
 export interface TestAppOptions {
   chat?: Chat;
   breaker?: BreakerStatus;
+  /** Breaker del proveedor del modelo (por defecto, cerrado). */
+  modelBreaker?: BreakerStatus;
   userRateLimit?: { max: number; timeWindowMs: number };
   app?: Partial<AppDependencies>;
   /** Reloj de la cookie (ms). */
@@ -50,7 +52,7 @@ export async function makeTestApp(options: TestAppOptions = {}) {
     bodyLimitBytes: 16_384,
     rateLimit: { max: 1_000, timeWindowMs: 60_000 },
     corsOrigins: [ALLOWED_ORIGIN],
-    checkHealth: createCheckHealth({ fleetApi: breaker }),
+    checkHealth: createCheckHealth({ fleetApi: breaker, model: options.modelBreaker ?? { state: () => "closed" as const } }),
     registerRoutes: (instance) => {
       registerChatRoute(instance, { auth, chat, userRateLimit: options.userRateLimit ?? { max: 100, timeWindowMs: 60_000 } });
     },

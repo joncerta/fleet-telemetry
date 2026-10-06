@@ -1,7 +1,8 @@
-import { agentHealthResponseSchema, apiErrorSchema, chatResponseSchema, healthResponseSchema } from "@fleet/contracts";
+import { agentHealthResponseSchema, apiErrorSchema, chatResponseSchema, livenessResponseSchema } from "@fleet/contracts";
 import { createSessionCodec } from "@fleet/platform";
+import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentFailedError, AgentTimeoutError } from "../../application/errors.js";
+import { AgentCancelledError, AgentFailedError, AgentTimeoutError } from "../../application/errors.js";
 import type { Chat } from "../../application/chat.js";
 import type { BreakerStatus } from "../../application/ports.js";
 import { ALLOWED_ORIGIN, CHAT_RESPONSE, makeTestApp, NORTE, SUR } from "../../testing/test-app.js";
@@ -69,10 +70,9 @@ describe("POST /v1/chat", () => {
 
     expect(response.statusCode).toBe(200);
     expect(chatResponseSchema.parse(response.json())).toEqual(CHAT_RESPONSE);
-    expect(made.chat).toHaveBeenCalledWith({
-      context: { identity: NORTE, sessionToken: token, correlationId: "corr-123" },
-      message: "¿Qué vehículos?",
-    });
+    const call = vi.mocked(made.chat).mock.calls[0]?.[0];
+    expect(call).toMatchObject({ context: { identity: NORTE, sessionToken: token, correlationId: "corr-123" }, message: "¿Qué vehículos?" });
+    expect(call?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("el mismo texto con la sesión de otro tenant llega con ESA identidad", async () => {
@@ -138,6 +138,15 @@ describe("POST /v1/chat", () => {
 
       expect(response.statusCode).toBe(504);
       expect(apiErrorSchema.parse(response.json()).error.code).toBe("agent_timeout");
+    });
+
+    it("una pregunta cancelada por el cliente se mapea a 503 con mensaje fijo", async () => {
+      const made = await setup({ chat: failing(new AgentCancelledError()) });
+
+      const response = await post(made, { message: "hola" }, { cookie: made.sessionCookieOf(NORTE) });
+
+      expect(response.statusCode).toBe(503);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("agent_unavailable");
     });
 
     it("un fallo del agente responde 503 sin el mensaje ni la causa originales", async () => {
@@ -303,6 +312,47 @@ describe("POST /v1/chat", () => {
   });
 });
 
+describe("cancelación por cierre del cliente", () => {
+  it("si el cliente cierra la conexión, el caso de uso recibe el signal abortado", async () => {
+    let received: AbortSignal | undefined;
+    const started = Promise.withResolvers<void>();
+    const chat: Chat = ({ signal }) => {
+      received = signal;
+      started.resolve();
+      return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new AgentCancelledError())));
+    };
+    const made = await setup({ chat });
+    await made.app.listen({ host: "127.0.0.1", port: 0 });
+    const address = made.app.server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+
+    const request = http.request({ host: "127.0.0.1", port, path: "/v1/chat", method: "POST", headers: { "content-type": "application/json", cookie: made.sessionCookieOf(NORTE) } });
+    request.on("error", () => undefined);
+    request.end(JSON.stringify({ message: "hola" }));
+    await started.promise;
+    expect(received?.aborted).toBe(false);
+
+    request.destroy();
+
+    await vi.waitFor(() => expect(received?.aborted).toBe(true));
+  });
+
+  it("una pregunta respondida con normalidad no deja el signal abortado", async () => {
+    let received: AbortSignal | undefined;
+    const made = await setup({
+      chat: ({ signal }) => {
+        received = signal;
+        return Promise.resolve(CHAT_RESPONSE);
+      },
+    });
+
+    await post(made, { message: "hola" }, { cookie: made.sessionCookieOf(NORTE) });
+
+    expect(received).toBeDefined();
+    expect(received?.aborted).toBe(false);
+  });
+});
+
 describe("GET /health y /health/live", () => {
   const breakerIn = (state: "closed" | "open" | "halfOpen"): BreakerStatus => ({ state: () => state });
 
@@ -314,9 +364,31 @@ describe("GET /health y /health/live", () => {
     expect(response.statusCode).toBe(200);
     expect(agentHealthResponseSchema.parse(response.json())).toEqual({
       status: "ok",
-      checks: { fleetApi: "up" },
-      dependencies: { fleetApi: { breaker: "closed" } },
+      checks: { fleetApi: "up", model: "up" },
+      dependencies: { fleetApi: { breaker: "closed" }, model: { breaker: "closed" } },
     });
+  });
+
+  it("con el breaker del modelo abierto responde 503 degraded aunque fleet-api esté bien", async () => {
+    const made = await setup({ breaker: breakerIn("closed"), modelBreaker: breakerIn("open") });
+
+    const response = await made.app.inject({ method: "GET", url: "/health" });
+
+    expect(response.statusCode).toBe(503);
+    expect(agentHealthResponseSchema.parse(response.json())).toEqual({
+      status: "degraded",
+      checks: { fleetApi: "up", model: "down" },
+      dependencies: { fleetApi: { breaker: "closed" }, model: { breaker: "open" } },
+    });
+  });
+
+  it("con el breaker del modelo en halfOpen sigue ok y lo refleja", async () => {
+    const made = await setup({ modelBreaker: breakerIn("halfOpen") });
+
+    const response = await made.app.inject({ method: "GET", url: "/health" });
+
+    expect(response.statusCode).toBe(200);
+    expect(agentHealthResponseSchema.parse(response.json()).dependencies.model?.breaker).toBe("halfOpen");
   });
 
   it("con el breaker abierto responde 503 degraded con el mismo cuerpo", async () => {
@@ -327,8 +399,8 @@ describe("GET /health y /health/live", () => {
     expect(response.statusCode).toBe(503);
     expect(agentHealthResponseSchema.parse(response.json())).toEqual({
       status: "degraded",
-      checks: { fleetApi: "down" },
-      dependencies: { fleetApi: { breaker: "open" } },
+      checks: { fleetApi: "down", model: "up" },
+      dependencies: { fleetApi: { breaker: "open" }, model: { breaker: "closed" } },
     });
   });
 
@@ -347,7 +419,9 @@ describe("GET /health y /health/live", () => {
     const response = await made.app.inject({ method: "GET", url: "/health/live" });
 
     expect(response.statusCode).toBe(200);
-    expect(healthResponseSchema.parse(response.json())).toEqual({ status: "ok", checks: {} });
+    // `livenessResponseSchema` (como el gateway y fleet-api): solo `status`, sin `checks`.
+    expect(livenessResponseSchema.parse(response.json())).toEqual({ status: "ok" });
+    expect(response.json()).toEqual({ status: "ok" });
   });
 
   it("la salud no pide sesión, no lleva datos sensibles y no cuenta para el rate limit", async () => {

@@ -1,6 +1,6 @@
 import type { ApiError } from "@fleet/contracts";
 import { hasZodFastifySchemaValidationErrors, isResponseSerializationError } from "fastify-type-provider-zod";
-import { AgentFailedError, AgentTimeoutError } from "../../application/errors.js";
+import { AgentCancelledError, AgentFailedError, AgentTimeoutError } from "../../application/errors.js";
 
 export interface MappedError {
   statusCode: number;
@@ -64,7 +64,8 @@ export function mapError(error: unknown): MappedError {
   if (hasZodFastifySchemaValidationErrors(error)) return INVALID_REQUEST();
   if (isResponseSerializationError(error)) return INTERNAL_ERROR();
   if (error instanceof AgentTimeoutError) return apiError(504, "agent_timeout", "El asistente tardó demasiado en responder. Intenta de nuevo.");
-  if (error instanceof AgentFailedError) return apiError(503, "agent_unavailable", "El asistente no está disponible en este momento. Intenta de nuevo.");
+  // El cliente ya cerró la conexión: nadie leerá esta respuesta, pero el estado queda en el log del servidor.
+  if (error instanceof AgentFailedError || error instanceof AgentCancelledError) return apiError(503, "agent_unavailable", "El asistente no está disponible en este momento. Intenta de nuevo.");
 
   const code = codeOf(error);
   const byCode = code === undefined ? undefined : FASTIFY_CODES[code];

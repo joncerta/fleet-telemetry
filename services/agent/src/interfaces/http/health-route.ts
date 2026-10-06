@@ -1,10 +1,10 @@
-import { agentHealthResponseSchema, healthResponseSchema, type AgentHealthResponse } from "@fleet/contracts";
+import { agentHealthResponseSchema, livenessResponseSchema, type AgentHealthResponse } from "@fleet/contracts";
 import type { AgentApp } from "./build-app.js";
 
 /**
- * `GET /health`: `200` con todo disponible y `503` con el breaker hacia fleet-api abierto, con el mismo cuerpo
- * (`agentHealthResponseSchema`: solo estados). `GET /health/live`: el proceso responde (no mira dependencias: un orquestador que lo usa
- * para reiniciar no debe reiniciar el agente porque fleet-api esté caído). Ambos sin autenticación y fuera del rate limit.
+ * `GET /health`: `200` con todo disponible y `503` con el breaker hacia fleet-api o hacia el modelo abierto, con el mismo cuerpo
+ * (`agentHealthResponseSchema`: solo estados). `GET /health/live` (`livenessResponseSchema`, como el gateway y fleet-api): el proceso
+ * responde (no mira dependencias: un orquestador que lo usa para reiniciar no debe reiniciar el agente porque fleet-api esté caído). Ambos sin autenticación y fuera del rate limit.
  */
 export function registerHealthRoutes(app: AgentApp, checkHealth: () => AgentHealthResponse): void {
   app.get(
@@ -16,8 +16,7 @@ export function registerHealthRoutes(app: AgentApp, checkHealth: () => AgentHeal
     },
   );
 
-  app.get("/health/live", { config: { rateLimit: false }, schema: { response: { 200: healthResponseSchema } } }, () => ({
+  app.get("/health/live", { config: { rateLimit: false }, schema: { response: { 200: livenessResponseSchema } } }, () => ({
     status: "ok" as const,
-    checks: {},
   }));
 }

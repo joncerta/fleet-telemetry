@@ -30,6 +30,8 @@ const errorResponses = {
  * El rate limit es POR USUARIO (la identidad de la cookie verificada; sin sesión válida, por IP) y corre antes que la autenticación: la
  * clave se calcula verificando la cookie, que es una comparación de HMAC y no toca fleet-api ni el modelo. Así un 401 también cuenta.
  *
+ * El `signal` del caso de uso se aborta si el cliente cierra la conexión (`AgentCancelledError`).
+ *
  * Los logs llevan solo conteos, nombres de herramienta y duración: nunca la pregunta ni la respuesta, que pueden mencionar placas.
  */
 export function registerChatRoute(app: AgentApp, deps: ChatRouteDependencies): void {
@@ -51,14 +53,28 @@ export function registerChatRoute(app: AgentApp, deps: ChatRouteDependencies): v
       },
       schema: { body: chatRequestSchema, response: { 200: chatResponseSchema, ...errorResponses } },
     },
-    async (request) => {
+    async (request, reply) => {
       const session = sessionOfRequest(request);
       const startedAt = performance.now();
 
-      const response = await deps.chat({
-        context: { identity: session.identity, sessionToken: session.sessionToken, correlationId: request.id },
-        message: request.body.message,
-      });
+      // Si el usuario cierra la pestaña antes de que se responda, se cancela la corrida: no se sigue pagando el modelo por nada.
+      // Se escucha el cierre de la RESPUESTA (el de la petición también se emite al terminar de leer el cuerpo) y solo cuenta si no se terminó de escribir.
+      const clientGone = new AbortController();
+      const onClose = (): void => {
+        if (!reply.raw.writableFinished) clientGone.abort();
+      };
+      reply.raw.once("close", onClose);
+
+      let response: Awaited<ReturnType<Chat>>;
+      try {
+        response = await deps.chat({
+          context: { identity: session.identity, sessionToken: session.sessionToken, correlationId: request.id },
+          message: request.body.message,
+          signal: clientGone.signal,
+        });
+      } finally {
+        reply.raw.off("close", onClose);
+      }
 
       request.log.info(
         {
