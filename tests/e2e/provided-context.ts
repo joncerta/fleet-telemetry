@@ -7,6 +7,8 @@ declare module "vitest" {
     runId: string;
     /** Base URL del ingest-gateway que levantó el arnés (puerto propio del e2e). */
     gatewayUrl: string;
+    /** Base URL de fleet-api que levantó el arnés (puerto propio del e2e). */
+    fleetApiUrl: string;
     /** Fin de cada partición de telemetry.raw (partición -> offset) cuando se ancló el grupo del processor: no lee nada anterior. */
     rawBacklogEnd: Record<string, string>;
     /** Consumer group del processor del e2e. */
