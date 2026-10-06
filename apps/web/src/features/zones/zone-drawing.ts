@@ -4,7 +4,7 @@ import { isInsideBoundingBox, ZONE_MAX_VERTICES } from "@fleet/contracts";
 export type Position = readonly [number, number];
 
 /** Por qué se rechazó la última acción; la UI lo dice con texto. Un clic repetido en el mismo punto se ignora en silencio. */
-export type DrawingIssue = "self_intersection" | "max_vertices" | "outside_colombia" | "too_few_vertices";
+export type DrawingIssue = "self_intersection" | "max_vertices" | "outside_colombia" | "zero_area" | "too_few_vertices";
 
 /**
  * Máquina de estados del dibujo de una zona (pura, sin React ni MapLibre).
@@ -28,6 +28,20 @@ export const isInsideColombia = (vertex: Position): boolean => isInsideBoundingB
 const same = (a: Position, b: Position): boolean => a[0] === b[0] && a[1] === b[1];
 
 export const distinctCount = (vertices: readonly Position[]): number => new Set(vertices.map((vertex) => `${String(vertex[0])},${String(vertex[1])}`)).size;
+
+/** Área con signo (fórmula del zapato) del anillo implícito de `vertices`, en grados². 0 si son colineales. */
+export function signedArea(vertices: readonly Position[]): number {
+  let sum = 0;
+  for (let i = 0; i < vertices.length; i += 1) {
+    const a = vertices[i];
+    const b = vertices[(i + 1) % vertices.length];
+    if (a !== undefined && b !== undefined) sum += a[0] * b[1] - b[0] * a[1];
+  }
+  return sum / 2;
+}
+
+/** Por debajo de esta área (grados², ~1 cm²) un polígono es degenerado (todos los puntos colineales o casi). */
+const MIN_AREA = 1e-14;
 
 /** Signo del giro a→b→c (producto cruz): >0 antihorario, <0 horario, 0 colineales. */
 const orientation = (a: Position, b: Position, c: Position): number => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
@@ -61,7 +75,9 @@ function crossesPath(path: readonly Position[], from: Position, to: Position, cl
     const b = path[i + 1];
     if (a === undefined || b === undefined) continue;
     if (i === lastSegment) {
-      if (orientation(a, b, to) === 0 && onSegment(a, b, to)) return true;
+      // Pliegue: `to` colineal con el tramo contiguo y del mismo lado que su inicio (volver sobre él, pase o no de `a`).
+      // Seguir recto (colineal pero del lado opuesto) es válido.
+      if (orientation(a, b, to) === 0 && (a[0] - from[0]) * (to[0] - from[0]) + (a[1] - from[1]) * (to[1] - from[1]) > 0) return true;
       continue;
     }
     if (i === 0 && closing) continue;
@@ -114,6 +130,9 @@ export function undo(state: DrawingState): DrawingState {
   return state;
 }
 
+/** Vuelve a `idle` SIEMPRE, también guardando (cierre de sesión o desmontaje: no puede quedar un dibujo trabado). */
+export const reset = (): DrawingState => IDLE;
+
 /** Sale del modo dibujo y descarta lo dibujado. No interrumpe un guardado en curso. */
 export const cancel = (state: DrawingState): DrawingState => (state.phase === "saving" ? state : IDLE);
 
@@ -127,7 +146,12 @@ export function close(state: DrawingState): DrawingState {
   const first = vertices[0];
   const last = vertices[vertices.length - 1];
   if (first === undefined || last === undefined || distinctCount(vertices) < MIN_DISTINCT_VERTICES) return { ...state, issue: "too_few_vertices" };
-  if (crossesPath(vertices, last, first, true)) return { ...state, issue: "self_intersection" };
+  // Todos en línea recta: no encierran nada (y "se pliegan" sobre sí mismos, pero lo útil de decir es que no hay área).
+  const second = vertices.find((vertex) => !same(vertex, first));
+  if (second === undefined || vertices.every((vertex) => orientation(first, second, vertex) === 0)) return { ...state, issue: "zero_area" };
+  if (crossesPath(vertices, last, first, true) || hasSelfIntersection(vertices)) return { ...state, issue: "self_intersection" };
+  // Un polígono casi plano (área ínfima) tampoco sirve. Un "moño" puede sumar área cero, pero ya se rechazó arriba por cruzarse.
+  if (Math.abs(signedArea(vertices)) < MIN_AREA) return { ...state, issue: "zero_area" };
   return { phase: "closed", vertices, ring: [...vertices, first] };
 }
 

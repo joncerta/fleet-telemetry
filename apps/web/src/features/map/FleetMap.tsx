@@ -1,8 +1,9 @@
 "use client";
 
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Map as MapLibreMap, NavigationControl, setWorkerUrl, type GeoJSONSource } from "maplibre-gl";
+import { Map as MapLibreMap, NavigationControl, setWorkerUrl, type GeoJSONSource, type MapLayerMouseEvent } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
 import { useServices } from "../../app-services/services-context";
 import { logWarn } from "../../lib/log";
 import { criticalZoneIdsOf } from "../fleet/vehicle-status";
@@ -24,9 +25,8 @@ import {
 import { MapLegend } from "./MapLegend";
 import { createLoadWatchdog, createRenderScheduler } from "./render-scheduler";
 import { statusIcons } from "./status-icons";
-import { isDrawing } from "../zones/zone-drawing-store";
 import { toVehicleFeatures } from "./vehicle-features";
-import { attachZoneDrawing } from "./zone-drawing-layer";
+import { attachZoneDrawing, unlessDrawing } from "./zone-drawing-layer";
 
 /**
  * Worker de MapLibre servido como archivo estático (lo copia `scripts/copy-maplibre-worker.mjs` desde la versión instalada): la URL por
@@ -66,6 +66,8 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
   const [mapState, setMapState] = useState<MapState>("loading");
   /** La fuente de vehículos terminó de procesarse (lo hace el worker de MapLibre): solo entonces se ven en el mapa. */
   const [vehiclesState, setVehiclesState] = useState<MapState>("loading");
+  /** Colocando puntos: se ve la cruz del centro (el punto que agrega "Agregar punto en el centro del mapa"). */
+  const placingPoints = useStore(zoneDrawingStore, (state) => state.drawing.phase === "drawing");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -100,8 +102,6 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
     let criticalZoneIds = criticalZoneIdsOf(null);
     let renderedSelection: string | null = null;
     let detachZoneDrawing: (() => void) | null = null;
-    /** Dibujando una zona: los clics agregan vértices y no seleccionan vehículos ni acercan clústeres. */
-    const drawing = () => isDrawing(zoneDrawingStore.getState());
 
     const vehiclesSource$ = () => map.getSource<GeoJSONSource>(SOURCE_IDS.vehicles);
     const zonesSource$ = () => map.getSource<GeoJSONSource>(SOURCE_IDS.zones);
@@ -164,31 +164,44 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
       setVehiclesState("ready");
     });
 
-    const onClick = map.on("click", LAYER_IDS.vehicles, (event) => {
-      if (drawing()) return;
-      const vehicleId: unknown = event.features?.[0]?.properties.vehicleId;
-      if (typeof vehicleId === "string") fleetStore.getState().selectVehicle(vehicleId);
-    });
+    // Dibujando una zona, los clics agregan vértices: no seleccionan vehículos ni acercan clústeres (`unlessDrawing`).
+    const onClick = map.on(
+      "click",
+      LAYER_IDS.vehicles,
+      unlessDrawing(zoneDrawingStore, (event: MapLayerMouseEvent) => {
+        const vehicleId: unknown = event.features?.[0]?.properties.vehicleId;
+        if (typeof vehicleId === "string") fleetStore.getState().selectVehicle(vehicleId);
+      }),
+    );
     // Un clic en un clúster acerca el mapa hasta que se separa.
-    const onClusterClick = map.on("click", LAYER_IDS.clusters, (event) => {
-      if (drawing()) return;
-      const clusterId: unknown = event.features?.[0]?.properties.cluster_id;
-      if (typeof clusterId !== "number") return;
-      const center = event.lngLat;
-      vehiclesSource$()
-        ?.getClusterExpansionZoom(clusterId)
-        .then((zoom) => map.easeTo({ center, zoom }))
-        .catch(() => logWarn("No se pudo expandir un clúster"));
-    });
+    const onClusterClick = map.on(
+      "click",
+      LAYER_IDS.clusters,
+      unlessDrawing(zoneDrawingStore, (event: MapLayerMouseEvent) => {
+        const clusterId: unknown = event.features?.[0]?.properties.cluster_id;
+        if (typeof clusterId !== "number") return;
+        const center = event.lngLat;
+        vehiclesSource$()
+          ?.getClusterExpansionZoom(clusterId)
+          .then((zoom) => map.easeTo({ center, zoom }))
+          .catch(() => logWarn("No se pudo expandir un clúster"));
+      }),
+    );
     const pointerOn = (layer: string) => [
-      map.on("mouseenter", layer, () => {
-        if (drawing()) return;
-        map.getCanvas().style.cursor = "pointer";
-      }),
-      map.on("mouseleave", layer, () => {
-        if (drawing()) return;
-        map.getCanvas().style.cursor = "";
-      }),
+      map.on(
+        "mouseenter",
+        layer,
+        unlessDrawing(zoneDrawingStore, () => {
+          map.getCanvas().style.cursor = "pointer";
+        }),
+      ),
+      map.on(
+        "mouseleave",
+        layer,
+        unlessDrawing(zoneDrawingStore, () => {
+          map.getCanvas().style.cursor = "";
+        }),
+      ),
     ];
     const pointerSubscriptions = [...pointerOn(LAYER_IDS.vehicles), ...pointerOn(LAYER_IDS.clusters)];
     const onError = map.on("error", () => {
@@ -213,8 +226,19 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
       {/* Tamaño por h-full/w-full, no por posición: maplibre-gl.css le pone `position: relative` al contenedor y anularía un `absolute`. */}
       <div ref={containerRef} className="h-full w-full" aria-hidden={mapState === "error"} />
       {mapState === "ready" && <MapLegend vehicles={vehiclesState} />}
+      {placingPoints && <CenterCross />}
       {mapState === "loading" && <MapMessage>Cargando mapa…</MapMessage>}
       {mapState === "error" && <MapMessage>No se pudo mostrar el mapa. La lista de vehículos del panel tiene la misma información.</MapMessage>}
+    </div>
+  );
+}
+
+/** Cruz fija en el centro del mapa mientras se dibuja: no recibe el puntero ni se anuncia (el botón del panel lo explica). */
+function CenterCross() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center justify-center">
+      <span className="absolute h-6 w-0.5 bg-focus" />
+      <span className="absolute h-0.5 w-6 bg-focus" />
     </div>
   );
 }

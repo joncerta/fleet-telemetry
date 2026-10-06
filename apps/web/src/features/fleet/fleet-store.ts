@@ -4,6 +4,7 @@ import type {
   SseSnapshotTolerant,
   StoppedVehiclesResponseTolerant,
   ZoneFeatureCollectionTolerant,
+  ZoneFeatureTolerant,
 } from "@fleet/contracts";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { failed, idle, loading, ready, type Loadable } from "../../lib/loadable";
@@ -36,6 +37,8 @@ export interface FleetStoreActions {
   startLoading(key: ResourceKey): void;
   resolveResource<K extends ResourceKey>(key: K, data: NonNullable<FleetResources[K]["data"]>, nowMs: number): void;
   failResource(key: ResourceKey, error: string): void;
+  /** Inserta una zona recién creada. Sin lista cargada no hace nada (la carga traerá la zona); deduplica por `zoneId`. */
+  addZone(feature: ZoneFeatureTolerant): void;
   /** Vuelve al estado inicial (al cerrar sesión): un usuario nunca ve datos del tenant del anterior. */
   reset(): void;
 }
@@ -107,6 +110,13 @@ export function createFleetStore(): StoreApi<FleetStore> {
 
       resolveResource(key, value, nowMs) {
         set({ [key]: ready<unknown>(value, nowMs) } as Partial<FleetStoreState>);
+      },
+
+      addZone(feature) {
+        const { zones } = get();
+        if (zones.data === null) return;
+        if (zones.data.features.some((existing) => existing.properties.zoneId === feature.properties.zoneId)) return;
+        set({ zones: { ...zones, data: { ...zones.data, features: [...zones.data.features, feature] } } });
       },
 
       failResource(key, error) {

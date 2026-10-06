@@ -226,4 +226,27 @@ describe("createFleetSync", () => {
     expect(store.getState().summary.data).toBeNull();
     expect(store.getState().vehicles[VEHICLE_A]?.seq).toBe("10");
   });
+
+  it("reloadZones vuelve a leer las zonas e invalida una lectura vieja en vuelo; tras stop no hace nada", async () => {
+    const { api, store, sync } = setup();
+    sync.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const first = deferred<ZoneFeatureCollectionTolerant>();
+    api.getZones.mockReturnValueOnce(first.promise);
+    sync.reloadZones();
+    const fresh: ZoneFeatureCollectionTolerant = { type: "FeatureCollection", features: [] };
+    api.getZones.mockResolvedValueOnce(fresh);
+    sync.reloadZones();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().zones.data).toBe(fresh);
+    // La respuesta vieja llega tarde y no pisa a la nueva.
+    first.resolve({ type: "FeatureCollection", features: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().zones.data).toBe(fresh);
+
+    const calls = api.getZones.mock.calls.length;
+    sync.stop();
+    sync.reloadZones();
+    expect(api.getZones.mock.calls.length).toBe(calls);
+  });
 });

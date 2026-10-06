@@ -4,7 +4,8 @@ import type { PublicEnv } from "../config/public-env";
 import { createSessionStore, type SessionStore } from "../features/auth/session-store";
 import { createFleetStore, type FleetStore } from "../features/fleet/fleet-store";
 import { createZoneDrawingStore, type ZoneDrawingStore } from "../features/zones/zone-drawing-store";
-import { createFleetSync } from "../features/fleet/fleet-sync";
+import { createZoneController, type ZoneController } from "../features/zones/zone-controller";
+import { createFleetSync, type FleetSync } from "../features/fleet/fleet-sync";
 import { browserEventSource, createFleetStream, type SessionProbe } from "../features/stream/fleet-stream-client";
 import { createAgentApi, type AgentApi } from "../lib/api/agent-api";
 import { createFleetApi, FLEET_API_PATHS, type FleetApi } from "../lib/api/fleet-api";
@@ -57,6 +58,8 @@ export interface AppServices {
   sessionStore: StoreApi<SessionStore>;
   /** Dibujo de una zona en curso: lo comparten el mapa (clics) y el panel "Zonas". */
   zoneDrawingStore: StoreApi<ZoneDrawingStore>;
+  /** Guardado de zonas: un controlador por servicios (como `fleetSync`), para cortarlo de forma síncrona al terminar la sesión. */
+  zoneController: ZoneController;
   /** La ÚNICA conexión SSE de la app (con conteo de referencias). */
   fleetSync: SharedResource;
   /** Registra el login exitoso (identidad en memoria) y avisa a las demás pestañas para que no sigan con la sesión anterior. */
@@ -74,9 +77,11 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
 
   // Sin sesión (401 en una llamada o en el stream): se corta el stream y se borran los datos ANTES de ir al login.
   const endSession = () => {
+    // Primero lo que puede escribir en el store (una respuesta de `POST /v1/zones` en vuelo), de forma síncrona, ANTES de borrar los datos.
+    zoneController.dispose();
     fleetSync.dispose();
     fleetStore.getState().reset();
-    zoneDrawingStore.getState().cancel();
+    zoneDrawingStore.getState().reset();
     sessionStore.getState().signedOut();
   };
 
@@ -118,9 +123,24 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
     }
   };
 
+  /** La sincronización activa (hay una mientras el dashboard la tenga adquirida): para pedir la relectura de zonas. */
+  let activeSync: FleetSync | null = null;
+  const reloadZones = () => activeSync?.reloadZones();
+
+  const zoneController = createZoneController({
+    createZone: (request, signal) => api.createZone(request, signal),
+    drawing: zoneDrawingStore,
+    onCreated: (feature) => {
+      fleetStore.getState().addZone(feature);
+      // La inserción local es inmediata; la relectura la confirma con lo que guardó el servidor.
+      reloadZones();
+    },
+    onNeedsReload: reloadZones,
+  });
+
   const fleetSync: SharedResource = createSharedResource(
-    () =>
-      createFleetSync({
+    () => {
+      const sync = createFleetSync({
         api,
         store: fleetStore,
         onUnauthorized: endSession,
@@ -137,7 +157,16 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
             },
             callbacks,
           ),
-      }),
+      });
+      activeSync = sync;
+      return {
+        start: () => sync.start(),
+        stop: () => {
+          sync.stop();
+          if (activeSync === sync) activeSync = null;
+        },
+      };
+    },
     STREAM_RELEASE_DELAY_MS,
   );
 
@@ -148,12 +177,14 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
     fleetStore,
     sessionStore,
     zoneDrawingStore,
+    zoneController,
     fleetSync,
     signIn(session) {
       sessionStore.getState().signedIn(session);
       announceSessionChange();
     },
     async signOut() {
+      zoneController.dispose();
       fleetSync.dispose();
       try {
         await api.logout();
@@ -161,7 +192,7 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
         logWarn("No se pudo cerrar la sesión en el servidor");
       }
       fleetStore.getState().reset();
-      zoneDrawingStore.getState().cancel();
+      zoneDrawingStore.getState().reset();
       // Cierre explícito (puede ser un equipo compartido): no quedan preferencias de la interfaz del usuario.
       clearPanelPreferences(browserStorage());
       sessionStore.getState().signedOut();

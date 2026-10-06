@@ -45,6 +45,7 @@ export function zoneSaveFailure(error: unknown): ZoneSaveFailure {
 export function drawingIssueMessage(issue: DrawingIssue): string {
   if (issue === "self_intersection") return "Ese punto haría que el polígono se cruce consigo mismo. Elige otro lugar.";
   if (issue === "outside_colombia") return "Ese punto queda fuera de Colombia. La zona debe estar dentro del área de operación.";
+  if (issue === "zero_area") return "Esos puntos no encierran un área (están en línea recta). Mueve alguno para formar un polígono.";
   if (issue === "max_vertices") return "Se alcanzó el máximo de puntos. Cierra el polígono.";
   return "Un polígono necesita al menos 3 puntos distintos.";
 }

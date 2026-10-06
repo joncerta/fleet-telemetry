@@ -1,4 +1,4 @@
-import type { Session } from "@fleet/contracts";
+import type { Session, ZoneFeatureTolerant } from "@fleet/contracts";
 import { SSE_EVENTS } from "@fleet/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UnauthorizedError } from "../lib/api/http-client";
@@ -181,5 +181,87 @@ describe("createAppServices", () => {
     RecordingEventSource.opened[0]?.source.emit(SSE_EVENTS.snapshot, snapshot({ vehicles: [vehicleState({ plate: "NRT203" })] }));
     await vi.advanceTimersByTimeAsync(0);
     expect(services.sessionStore.getState().status).toBe("authenticated");
+  });
+
+  describe("zonas: guardado en vuelo y fin de sesión", () => {
+    const created: ZoneFeatureTolerant = {
+      type: "Feature",
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [-74.1, 4.6],
+            [-74.0, 4.6],
+            [-74.0, 4.7],
+            [-74.1, 4.6],
+          ],
+        ],
+      },
+      properties: { zoneId: "f1ee7000-0000-4000-a000-0000000000b1", name: "Zona de Norte", kind: "depot" },
+    };
+
+    /** Servicios con sesión, zonas cargadas y un polígono cerrado listo para guardar; el POST de zonas queda en vuelo hasta `answer()`. */
+    function withZoneInFlight() {
+      let answer: () => void = () => undefined;
+      const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith("/v1/zones") && init?.method === "POST") return new Promise<Response>((resolve) => (answer = () => resolve(jsonOf(201, created))));
+        if (url.endsWith("/v1/zones/geojson")) return Promise.resolve(jsonOf(200, { type: "FeatureCollection", features: [] }));
+        return Promise.resolve(unauthorized());
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const services = withSessionAndData();
+      services.fleetStore.getState().resolveResource("zones", { type: "FeatureCollection", features: [] }, NOW_MS);
+      const drawing = services.zoneDrawingStore.getState();
+      drawing.start();
+      for (const vertex of [
+        [-74.1, 4.6],
+        [-74.0, 4.6],
+        [-74.0, 4.7],
+      ] as const)
+        drawing.addVertex(vertex);
+      drawing.close();
+      return { services, answer: () => answer(), fetchMock };
+    }
+
+    it("al guardar, la zona entra al store de la flota", async () => {
+      const { services, answer } = withZoneInFlight();
+      const saving = services.zoneController.save("Zona de Norte", "depot");
+      answer();
+      await saving;
+      expect(services.fleetStore.getState().zones.data?.features.map((feature) => feature.properties.name)).toEqual(["Zona de Norte"]);
+      expect(services.zoneDrawingStore.getState().drawing.phase).toBe("idle");
+      expect(services.zoneController.store.getState().createdName).toBe("Zona de Norte");
+    });
+
+    it("cerrar sesión durante el POST: la respuesta tardía no mete la zona de Norte en el store ni deja el dibujo trabado", async () => {
+      const { services, answer } = withZoneInFlight();
+      const saving = services.zoneController.save("Zona de Norte", "depot");
+      expect(services.zoneDrawingStore.getState().drawing.phase).toBe("saving");
+
+      await services.signOut();
+      answer();
+      await saving;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(services.fleetStore.getState().zones.data).toBeNull();
+      expect(services.zoneDrawingStore.getState().drawing.phase).toBe("idle");
+      expect(services.zoneController.store.getState().createdName).toBeNull();
+    });
+
+    it("un 401 o el cambio de sesión en otra pestaña durante el POST tampoco filtran la zona al siguiente login", async () => {
+      const { services, answer } = withZoneInFlight();
+      const saving = services.zoneController.save("Zona de Norte", "depot");
+      services.channel.deliver({ type: "session-changed" });
+      answer();
+      await saving;
+      await vi.advanceTimersByTimeAsync(0);
+      // Entra otro usuario en la misma pestaña: la lista empieza vacía y el panel puede dibujar de nuevo.
+      services.signIn(otherTenantSession);
+      expect(services.fleetStore.getState().zones.data).toBeNull();
+      expect(services.zoneDrawingStore.getState().drawing.phase).toBe("idle");
+      services.zoneDrawingStore.getState().start();
+      expect(services.zoneDrawingStore.getState().drawing.phase).toBe("drawing");
+    });
   });
 });
