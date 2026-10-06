@@ -132,14 +132,16 @@ export interface ZoneReader {
 export type CreateZoneResult =
   | { readonly status: "created"; readonly zone: ZoneFeature }
   | { readonly status: "name_taken" }
+  | { readonly status: "limit_reached" }
   | { readonly status: "invalid_geometry" };
 
 export interface ZoneRepository {
   /**
-   * Inserta la zona en el tenant. `name_taken` si el nombre ya existe en ESE tenant; `invalid_geometry` si PostGIS considera inválido el
+   * Inserta la zona en el tenant, si tiene menos de `maxPerTenant` (el conteo y el alta van serializados por tenant). `name_taken` si el nombre ya
+   * existe en ESE tenant (tiene prioridad); `limit_reached` si el tenant ya tiene `maxPerTenant` zonas; `invalid_geometry` si PostGIS considera inválido el
    * polígono (auto-intersección). Cualquier otro fallo de la base se propaga. Devuelve el Feature con el mismo formato que `findZones`.
    */
-  create(input: { tenantId: string; zoneId: string; name: string; kind: ZoneCreateRequest["kind"]; geometry: ZoneCreateRequest["geometry"] }): Promise<CreateZoneResult>;
+  create(input: { tenantId: string; zoneId: string; maxPerTenant: number; name: string; kind: ZoneCreateRequest["kind"]; geometry: ZoneCreateRequest["geometry"] }): Promise<CreateZoneResult>;
 }
 
 // --- Catálogo de vehículos y usuarios del tenant (todo filtra por `tenantId`) ---

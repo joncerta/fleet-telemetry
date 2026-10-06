@@ -1,4 +1,4 @@
-import { INVALID_GEOMETRY_ERROR_CODE, PLATE_TAKEN_ERROR_CODE, ZONE_NAME_TAKEN_ERROR_CODE, type ApiError } from "@fleet/contracts";
+import { INVALID_GEOMETRY_ERROR_CODE, PLATE_TAKEN_ERROR_CODE, ZONE_LIMIT_REACHED_ERROR_CODE, ZONE_NAME_TAKEN_ERROR_CODE, type ApiError } from "@fleet/contracts";
 import { hasZodFastifySchemaValidationErrors, isResponseSerializationError } from "fastify-type-provider-zod";
 import {
   InvalidCredentialsError,
@@ -8,6 +8,7 @@ import {
   ServerDrainingError,
   SessionInvalidError,
   VehicleNotFoundError,
+  ZoneLimitReachedError,
   ZoneNameTakenError,
 } from "../../application/errors.js";
 import { InvalidCursorError } from "./alert-cursor.js";
@@ -73,6 +74,7 @@ function codeOf(error: unknown): string | undefined {
  * - vehículo ajeno o inexistente -> `404 not_found`;
  * - placa ya existente en el tenant -> `409 plate_taken` (sin la placa en el mensaje);
  * - nombre de zona ya existente en el tenant -> `409 zone_name_taken` (sin el nombre en el mensaje);
+ * - tenant con el máximo de zonas -> `409 zone_limit_reached`;
  * - polígono que PostGIS considera inválido -> `400 invalid_geometry`;
  * - réplica apagándose (sin streams nuevos) -> `503 shutting_down` con `Retry-After`;
  * - código de vinculación inexistente, usado o vencido -> `404 invalid_pairing_code` (el mismo para los tres);
@@ -87,6 +89,7 @@ export function mapError(error: unknown): MappedError {
   if (error instanceof VehicleNotFoundError) return NOT_FOUND();
   if (error instanceof PlateTakenError) return apiError(409, PLATE_TAKEN_ERROR_CODE, "Ya existe un vehículo con esa placa.");
   if (error instanceof ZoneNameTakenError) return apiError(409, ZONE_NAME_TAKEN_ERROR_CODE, "Ya existe una zona con ese nombre.");
+  if (error instanceof ZoneLimitReachedError) return apiError(409, ZONE_LIMIT_REACHED_ERROR_CODE, "La flota alcanzó el máximo de zonas.");
   if (error instanceof InvalidZoneGeometryError) return apiError(400, INVALID_GEOMETRY_ERROR_CODE, "El polígono no es válido (por ejemplo, se cruza consigo mismo).");
   if (error instanceof ServerDrainingError) {
     return { ...apiError(503, "shutting_down", "El servidor se está reiniciando. Reintenta en unos segundos."), headers: { "retry-after": String(DRAINING_RETRY_AFTER_SECONDS) } };

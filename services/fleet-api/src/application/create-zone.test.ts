@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { zoneCreateRequestSchema, zoneFeatureSchema, type ZoneFeature } from "@fleet/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createCreateZone } from "./create-zone.js";
-import { InvalidZoneGeometryError, ZoneNameTakenError } from "./errors.js";
+import { InvalidZoneGeometryError, ZoneLimitReachedError, ZoneNameTakenError } from "./errors.js";
 import type { CreateZoneResult, ZoneRepository } from "./ports.js";
 
 const identity = { userId: randomUUID(), tenantId: randomUUID() };
@@ -31,7 +31,7 @@ function makeZones(result: CreateZoneResult) {
 describe("createCreateZone", () => {
   it("crea la zona en el tenant de la SESIÓN con un id generado por el servidor y devuelve el Feature", async () => {
     const { create, zones } = makeZones({ status: "created", zone: stored });
-    const createZone = createCreateZone({ zones, newZoneId: () => zoneId });
+    const createZone = createCreateZone({ zones, newZoneId: () => zoneId, maxPerTenant: 7 });
 
     const zone = await createZone({ identity, zone: request });
 
@@ -39,6 +39,7 @@ describe("createCreateZone", () => {
     expect(create).toHaveBeenCalledExactlyOnceWith({
       tenantId: identity.tenantId,
       zoneId,
+      maxPerTenant: 7,
       name: "Zona crítica Norte",
       kind: "critical",
       geometry: { type: "Polygon", coordinates: [ring] },
@@ -47,7 +48,7 @@ describe("createCreateZone", () => {
 
   it("un nombre ya existente en el tenant es ZoneNameTakenError, sin el nombre en el mensaje", async () => {
     const { zones } = makeZones({ status: "name_taken" });
-    const createZone = createCreateZone({ zones, newZoneId: () => zoneId });
+    const createZone = createCreateZone({ zones, newZoneId: () => zoneId, maxPerTenant: 7 });
 
     const failure = await createZone({ identity, zone: request }).catch((error: unknown) => error);
 
@@ -55,16 +56,23 @@ describe("createCreateZone", () => {
     expect(failure instanceof Error ? failure.message : "").not.toContain("Norte");
   });
 
+  it("un tenant que ya tiene el máximo de zonas es ZoneLimitReachedError", async () => {
+    const { zones } = makeZones({ status: "limit_reached" });
+    const createZone = createCreateZone({ zones, newZoneId: () => zoneId, maxPerTenant: 7 });
+
+    await expect(createZone({ identity, zone: request })).rejects.toBeInstanceOf(ZoneLimitReachedError);
+  });
+
   it("un polígono que PostGIS rechaza es InvalidZoneGeometryError", async () => {
     const { zones } = makeZones({ status: "invalid_geometry" });
-    const createZone = createCreateZone({ zones, newZoneId: () => zoneId });
+    const createZone = createCreateZone({ zones, newZoneId: () => zoneId, maxPerTenant: 7 });
 
     await expect(createZone({ identity, zone: request })).rejects.toBeInstanceOf(InvalidZoneGeometryError);
   });
 
   it("un fallo del repositorio se propaga tal cual (no se confunde con un error de negocio)", async () => {
     const boom = new Error("conexión perdida");
-    const createZone = createCreateZone({ zones: { create: () => Promise.reject(boom) }, newZoneId: () => zoneId });
+    const createZone = createCreateZone({ zones: { create: () => Promise.reject(boom) }, newZoneId: () => zoneId, maxPerTenant: 7 });
 
     await expect(createZone({ identity, zone: request })).rejects.toBe(boom);
   });
