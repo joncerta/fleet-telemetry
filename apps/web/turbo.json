@@ -1,0 +1,27 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "outputs": [".next/**", "!.next/cache/**", "public/vendor/**"],
+      "env": ["NEXT_PUBLIC_*"]
+    },
+    "typecheck": {
+      "outputs": ["next-env.d.ts", ".next/types/**"]
+    },
+    "test:e2e": {
+      "cache": false,
+      "passThroughEnv": [
+        "DATABASE_ADMIN_URL",
+        "DATABASE_URL",
+        "DATABASE_RO_URL",
+        "FLEET_APP_PASSWORD",
+        "FLEET_RO_PASSWORD",
+        "KAFKA_BROKERS",
+        "LOG_LEVEL",
+        "SEED_USER_PASSWORD",
+        "PLAYWRIGHT_BROWSERS_PATH"
+      ]
+    }
+  }
+}
