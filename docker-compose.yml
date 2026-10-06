@@ -303,6 +303,7 @@ services:
       SESSION_SECRET: "${SESSION_SECRET:?Falta SESSION_SECRET (>= 32 bytes), copia .env.example a .env}"
       AGENT_MODEL_PROVIDER: "${AGENT_MODEL_PROVIDER:-anthropic}"
       ANTHROPIC_API_KEY:
+      ANTHROPIC_WORKSPACE_ID:
       AGENT_CORS_ORIGINS: "${AGENT_CORS_ORIGINS:-http://localhost:3000}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       SHUTDOWN_TIMEOUT_MS: "${SHUTDOWN_TIMEOUT_MS:-15000}"

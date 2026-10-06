@@ -28,6 +28,12 @@ const fleetApiUrl = z
   .url({ protocol: /^https?$/ })
   .refine((value) => !URL.canParse(value) || (new URL(value).username === "" && new URL(value).password === ""), { error: "la URL no debe llevar credenciales" });
 
+/** Workspace de Anthropic (no es secreto). Vacío = ausente, como la API key. */
+const workspaceId = z
+  .string()
+  .transform((value) => (value.trim() === "" ? undefined : value.trim()))
+  .pipe(z.string().regex(/^wrkspc_[A-Za-z0-9]{1,64}$/, { error: "debe tener el formato wrkspc_<id alfanumérico>" }).optional());
+
 const agentConfig = z.object({
   AGENT_HOST: z.string().min(1).default("127.0.0.1"),
   AGENT_PORT: z.coerce.number().int().min(1).max(65_535).default(4003),
@@ -40,6 +46,8 @@ const agentConfig = z.object({
   AGENT_MODEL: z.string().min(1).default(DEFAULT_AGENT_MODEL),
   // Puede venir vacía (el .env.example la deja así): solo importa con el proveedor real.
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Obligatoria solo si la API key no está ligada a un workspace (Anthropic exige entonces el header `anthropic-workspace-id`).
+  ANTHROPIC_WORKSPACE_ID: workspaceId.optional(),
   // Tiempo máximo de UNA llamada al proveedor del modelo (`clientOptions.timeout`), en ms.
   AGENT_MODEL_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(20_000),
   // Llamadas simultáneas al proveedor del modelo en esta réplica (cola por encima de ese tope).

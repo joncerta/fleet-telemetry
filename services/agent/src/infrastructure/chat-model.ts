@@ -9,11 +9,15 @@ import { ScriptedChatModel } from "./scripted-chat-model.js";
 /** Tope de tokens de una respuesta del modelo: las respuestas del agente son cortas. */
 const MAX_OUTPUT_TOKENS = 1_024;
 
+const WORKSPACE_HEADER = "anthropic-workspace-id";
+
 export interface ChatModelSettings {
   provider: "anthropic" | "scripted";
   /** Modelo de Anthropic. Con el proveedor con guion no se usa. */
   model: string;
   apiKey?: string | undefined;
+  /** Workspace de Anthropic: se envía en `anthropic-workspace-id`. Solo hace falta si la API key no está ligada a un workspace. */
+  workspaceId?: string | undefined;
   /** Tiempo máximo de UNA petición al proveedor, en ms. */
   callTimeoutMs: number;
   /**
@@ -37,7 +41,11 @@ export function createProviderModel(settings: ChatModelSettings): BaseChatModel 
     apiKey: settings.apiKey,
     maxTokens: MAX_OUTPUT_TOKENS,
     maxRetries: MODEL_MAX_RETRIES,
-    clientOptions: { timeout: settings.callTimeoutMs, ...(settings.fetch !== undefined && { fetch: settings.fetch }) },
+    clientOptions: {
+      timeout: settings.callTimeoutMs,
+      ...(settings.fetch !== undefined && { fetch: settings.fetch }),
+      ...(settings.workspaceId !== undefined && settings.workspaceId !== "" && { defaultHeaders: { [WORKSPACE_HEADER]: settings.workspaceId } }),
+    },
   });
 }
 
