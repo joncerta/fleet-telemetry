@@ -1,5 +1,5 @@
 # Iniciar turno con los permisos ya concedidos: el tracking pasa a activo y el turno se puede terminar.
-# Uso: maestro test -e TOKEN=fdt_... -e VEHICLE_ID=<uuid> apps/mobile/.maestro/02-iniciar-turno.yaml
+# Uso: maestro test -e PAIRING_CODE=ABCD2345 apps/mobile/.maestro/02-iniciar-turno.yaml
 appId: co.fleet.driver
 env:
   DEV_CLIENT_URL: "fleetdriver://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081"

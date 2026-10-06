@@ -25,3 +25,6 @@ catalog:
 # pnpm bloquea los scripts de instalación por defecto. esbuild (vía tsx y vitest) valida su binario nativo.
 allowBuilds:
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - expo-constants@57.0.21

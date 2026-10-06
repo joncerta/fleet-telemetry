@@ -1,18 +1,15 @@
-# Vincula el dispositivo pegando el token. Requiere -e TOKEN=fdt_... -e VEHICLE_ID=<uuid>
-# (los imprime `pnpm device:token -- --vehicle NRT101`; el vehicleId sale en el log a stderr).
+# Vincula el dispositivo con un código de un solo uso. Requiere -e PAIRING_CODE=ABCD2345
+# (lo genera el operador con POST /v1/devices/pairing-codes; ver los comandos en el README del flujo 04).
 appId: co.fleet.driver
 ---
 - assertVisible:
     id: "pairing-screen"
 - tapOn:
-    id: "token-input"
-- inputText: ${TOKEN}
-- tapOn:
-    id: "vehicle-input"
-- inputText: ${VEHICLE_ID}
+    id: "code-input"
+- inputText: ${PAIRING_CODE}
 - tapOn:
     id: "link-button"
 - extendedWaitUntil:
     visible:
       id: "shift-screen"
-    timeout: 10000
+    timeout: 15000
