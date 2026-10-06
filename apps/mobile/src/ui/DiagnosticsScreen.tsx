@@ -42,6 +42,7 @@ export function DiagnosticsScreen({ model }: { model: AppModel }) {
         <Row label="Lotes fallidos (400)" value={String(d.counts.dead)} testID="diag-dead" />
         <Row label="Descartados por tope" value={String(d.counts.discarded)} testID="diag-discarded" />
         <Row label="Puntos inválidos al capturar" value={String(d.counts.invalidLocal)} testID="diag-invalid" />
+        <Row label="Fallos de la tarea en segundo plano" value={String(d.counts.taskFailures)} testID="diag-task-failures" />
       </Card>
 
       {reasons.length > 0 && (

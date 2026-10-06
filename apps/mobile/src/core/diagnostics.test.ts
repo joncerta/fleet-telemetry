@@ -32,6 +32,15 @@ describe("readDiagnostics", () => {
   });
 });
 
+describe("fallos de la tarea en segundo plano", () => {
+  it("se cuentan y aparecen en el diagnóstico", async () => {
+    const ctx = setup();
+    await ctx.store.countTaskFailure();
+    await ctx.store.countTaskFailure();
+    expect((await readDiagnostics(ctx.store)).counts.taskFailures).toBe(2);
+  });
+});
+
 describe("connectionStateOf", () => {
   it("isConnected no es internet: usa isInternetReachable", () => {
     expect(connectionStateOf({ isConnected: true, isInternetReachable: false })).toBe("offline");
@@ -43,7 +52,7 @@ describe("connectionStateOf", () => {
 });
 
 describe("syncSummaryOf", () => {
-  const counts = { pending: 0, inFlight: 0, rejected: 0, dead: 0, sent: 0, discarded: 0, invalidLocal: 0 };
+  const counts = { pending: 0, inFlight: 0, rejected: 0, dead: 0, sent: 0, discarded: 0, invalidLocal: 0, taskFailures: 0 };
   it("idle, synced, pending, backoff", () => {
     expect(syncSummaryOf({ counts, pausedReason: null, nextAttemptAt: null }, 0)).toBe("idle");
     expect(syncSummaryOf({ counts: { ...counts, sent: 5 }, pausedReason: null, nextAttemptAt: null }, 0)).toBe("synced");
