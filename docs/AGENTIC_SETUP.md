@@ -104,6 +104,9 @@ flowchart LR
 
 - **El agente LLM no es determinista.** En `/e2e-check`, una falla del agente se reintenta una vez; si pasa al segundo intento, se marca como ⚠️ flaky en vez de ocultarla.
 - **En Windows, PowerShell está denegado a propósito.** Todo corre en Git Bash, para que los comandos sean los mismos que en CI.
-- **El hook asume un solo agente editando a la vez.** Lee `git status` de todo el árbol de trabajo, así que si un subagente edita en segundo plano, el cierre de otro agente, o el del orquestador, verifica ese código a medio escribir y bloquea a quien no corresponde. Además, toma la raíz de `CLAUDE_PROJECT_DIR`, que en un worktree aislado puede no ser el árbol del agente.
-  - **Mitigación actual:** los implementadores corren en secuencia, nunca dos a la vez en el mismo árbol.
-  - **Pendiente antes de paralelizar las fases 2, 3 y 4a:** que el hook use la raíz git del `cwd` del agente, y que cada implementador paralelo trabaje en su propio worktree.
+- **Un árbol, un implementador.** El hook lee `git status` de todo el árbol de trabajo. Si dos agentes editan el mismo árbol a la vez, el cierre de uno verifica el código a medio escribir del otro y lo bloquea por algo que no es suyo.
+  - **Regla:** los implementadores que corren en paralelo trabajan cada uno en su propio worktree (`isolation: "worktree"`). En el árbol principal, uno por vez.
+  - **Base de los worktrees:** `worktree.baseRef: "head"` en `.claude/settings.json`. Sin eso, un worktree sale de `origin/master`, que solo recibe lo entregado; con esto, sale del `HEAD` local, que es `develop` al día. Cada agente aislado corre `pnpm install --frozen-lockfile` antes de empezar.
+  - **Lo que cambió el 2026-10-05:** el hook toma la raíz git del `cwd` del agente, así que un agente en un worktree verifica su propio árbol y no el principal. Antes tomaba `CLAUDE_PROJECT_DIR`. Además, ahora cubre `tools/` y `tests/`, y quita los colores ANSI de su salida.
+  - **Tests:** las funciones puras están en `tools/hooks/lib.mjs` y se prueban con `node --test tools/hooks/lib.test.mjs`. Además, se repitió a mano la prueba de bloqueo con un test roto: salió con código 2 y sin colores.
+  - **Sin verificar todavía:** que Claude Code entregue al `SubagentStop` el `cwd` del worktree. Se comprueba con el primer implementador que corra aislado.
