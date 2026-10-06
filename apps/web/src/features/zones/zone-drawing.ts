@@ -1,4 +1,4 @@
-import { COLOMBIA_BBOX, ZONE_MAX_VERTICES } from "@fleet/contracts";
+import { isInsideBoundingBox, ZONE_MAX_VERTICES } from "@fleet/contracts";
 
 /** Posición `[lng, lat]` (regla 13: longitud primero). */
 export type Position = readonly [number, number];
@@ -22,9 +22,8 @@ export const IDLE: DrawingState = { phase: "idle" };
 /** Mínimo de vértices distintos para un polígono. */
 export const MIN_DISTINCT_VERTICES = 3;
 
-/** Dentro del rectángulo de Colombia (`COLOMBIA_BBOX`, los bordes cuentan como dentro). El servidor vuelve a validarlo. */
-export const isInsideColombia = (vertex: Position): boolean =>
-  vertex[0] >= COLOMBIA_BBOX.minLon && vertex[0] <= COLOMBIA_BBOX.maxLon && vertex[1] >= COLOMBIA_BBOX.minLat && vertex[1] <= COLOMBIA_BBOX.maxLat;
+/** Dentro del rectángulo de Colombia (`COLOMBIA_BBOX` por defecto en `isInsideBoundingBox`, los bordes cuentan como dentro). El servidor vuelve a validarlo. */
+export const isInsideColombia = (vertex: Position): boolean => isInsideBoundingBox(vertex[0], vertex[1]);
 
 const same = (a: Position, b: Position): boolean => a[0] === b[0] && a[1] === b[1];
 

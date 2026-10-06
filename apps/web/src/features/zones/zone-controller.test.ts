@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiRequestError, NetworkError, UnauthorizedError } from "../../lib/api/http-client";
 import { createZoneController, type ZoneControllerDeps } from "./zone-controller";
-import { INVALID_GEOMETRY_ERROR_CODE, ZONE_NAME_MAX_LENGTH, ZONE_NAME_TAKEN_ERROR_CODE, type ZoneFeatureTolerant as ZoneFeature } from "@fleet/contracts";
+import { INVALID_GEOMETRY_ERROR_CODE, ZONE_LIMIT_REACHED_ERROR_CODE, ZONE_MAX_PER_TENANT, ZONE_NAME_MAX_LENGTH, ZONE_NAME_TAKEN_ERROR_CODE, type ZoneFeatureTolerant as ZoneFeature } from "@fleet/contracts";
 import type { CreateZone } from "./zone-controller";
 import { createZoneDrawingStore } from "./zone-drawing-store";
 import { INVALID_GEOMETRY_MESSAGE, NAME_TAKEN_MESSAGE } from "./zone-errors";
@@ -91,7 +91,8 @@ describe("guardar", () => {
     ["", "El nombre de la zona no puede estar vacío."],
     ["   ", "El nombre de la zona no puede estar vacío."],
     ["x".repeat(ZONE_NAME_MAX_LENGTH + 1), `El nombre admite a lo sumo ${String(ZONE_NAME_MAX_LENGTH)} caracteres.`],
-    ["Zona\u0007", "El nombre no admite caracteres de control ni de dirección de texto."],
+    ["Zona\u0007", "El nombre no admite caracteres de control, de formato ni de dirección de texto."],
+    ["Zona​X", "El nombre no admite caracteres de control, de formato ni de dirección de texto."],
   ])("valida el nombre %j antes de enviar", async (name, message) => {
     const { controller, create, state, phase } = setup();
     await controller.save(name, "critical");
@@ -124,6 +125,13 @@ describe("errores", () => {
     await controller.save("Norte", "critical");
     expect(state()).toEqual({ submit: "failed", error: INVALID_GEOMETRY_MESSAGE, nameError: null });
     expect(INVALID_GEOMETRY_MESSAGE).toContain("El polígono no es válido (se cruza consigo mismo)");
+  });
+
+  it("409 zone_limit_reached: aviso general con el máximo del contrato", async () => {
+    const { controller, state, phase } = setup(failing(apiError(409, ZONE_LIMIT_REACHED_ERROR_CODE)));
+    await controller.save("Norte", "critical");
+    expect(state()).toEqual({ submit: "failed", error: `Se alcanzó el máximo de ${String(ZONE_MAX_PER_TENANT)} zonas para tu flota.`, nameError: null });
+    expect(phase()).toBe("closed");
   });
 
   it("400 invalid_request: aviso general", async () => {
