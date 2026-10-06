@@ -1,6 +1,7 @@
-import type { Alert, Session, ZoneFeatureCollection, ZoneKind } from "@fleet/contracts";
+import type { Alert, Session, SseAlertTolerant, SseSnapshotTolerant, SseVehicleStateTolerant, VehicleState, ZoneFeatureCollection, ZoneKind } from "@fleet/contracts";
 import type { AuthIdentity } from "../domain/identity.js";
 import type { ZoneRef } from "../domain/fleet-status.js";
+import type { FleetStreamEvent } from "../domain/stream-ordering.js";
 
 /** Puertos de fleet-api: lo que sus casos de uso necesitan del mundo exterior. */
 
@@ -154,4 +155,46 @@ export interface PairingTransaction {
 export interface PairingUnitOfWork {
   /** Corre `work` en una transacción: la confirma si resuelve y la revierte si lanza. */
   run<T>(work: (transaction: PairingTransaction) => Promise<T>): Promise<T>;
+}
+
+// --- Stream SSE ---
+
+/** Estado de la flota de UN tenant, leído en una sola transacción (ver `FleetSnapshotReader`). */
+export interface FleetSnapshotData {
+  /** Último estado de cada vehículo con estado. */
+  readonly vehicles: readonly VehicleState[];
+  /** Alertas ACTIVAS (sin `resolvedAt`). */
+  readonly alerts: readonly Alert[];
+}
+
+export interface FleetSnapshotReader {
+  /**
+   * Vehículos y alertas activas del tenant, ambos de UNA transacción (`REPEATABLE READ`): una misma vista consistente de las dos tablas,
+   * de la que sale el `cursor`. Un tenant demasiado grande para un snapshot es un error (nunca se trunca en silencio).
+   */
+  read(tenantId: string): Promise<FleetSnapshotData>;
+}
+
+/** Suscripción a los cambios de la flota de un tenant (los que llegan por Kafka). */
+export interface FleetEventSubscriptions {
+  /** Entrega a `listener` cada evento del tenant desde ahora. Devuelve la función que cancela la suscripción (idempotente). */
+  readonly subscribe: (tenantId: string, listener: (event: FleetStreamEvent) => void) => () => void;
+}
+
+/** Un mensaje del stream: el `event:` y el `id:` de SSE, y su dato (esquemas `Sse*` del contrato). */
+export type FleetStreamMessage =
+  | { readonly event: "snapshot"; readonly id: string; readonly data: SseSnapshotTolerant }
+  | { readonly event: "vehicle.state"; readonly id: string; readonly data: SseVehicleStateTolerant }
+  | { readonly event: "alert"; readonly id: string; readonly data: SseAlertTolerant };
+
+/** La conexión de un cliente, vista por el caso de uso. La implementa la entrada HTTP sobre el socket. */
+export interface FleetStreamSink {
+  /** Escribe el mensaje en la conexión. Puede lanzar si la conexión ya se cerró. */
+  deliver(message: FleetStreamMessage): void;
+  /** Bytes escritos que el cliente todavía no ha leído (el buffer del socket): lo que mide a un cliente lento. */
+  pendingBytes(): number;
+  /** Corta la conexión del lado del servidor. Idempotente. */
+  end(): void;
+  /** Registra lo que debe pasar cuando la conexión se cierra (por el cliente o por `end`). */
+  onClose(listener: () => void): void;
 }

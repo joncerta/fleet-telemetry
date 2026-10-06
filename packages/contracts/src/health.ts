@@ -16,3 +16,14 @@ export const healthResponseSchema = z.object({
     .describe("Estado de cada dependencia del servicio, por nombre. Desde v1."),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
+
+/**
+ * Respuesta de `GET /health/live` (liveness). Aditivo, desde v1.
+ *
+ * Solo dice que el proceso responde: sin dependencias, así que no hay `checks` ni estado degradado. Lo usan ECS y el ALB
+ * para decidir si reiniciar la tarea; la salud de las dependencias (readiness) es `healthResponseSchema` en `/health`.
+ */
+export const livenessResponseSchema = z.object({
+  status: z.literal("ok").describe("Siempre `ok`: si el proceso no responde, no hay respuesta. Desde v1."),
+});
+export type LivenessResponse = z.infer<typeof livenessResponseSchema>;
