@@ -2,7 +2,7 @@ import type { TelemetryRawEvent } from "@fleet/contracts";
 import { evaluateMessage, type KnownIds, type MessageRejectionCode, type OriginalPayload } from "../domain/evaluate-message.js";
 import { classifyFailure, describeFailure } from "../domain/failure-classification.js";
 import { backoffDelayMs, type BackoffPolicy } from "../domain/retry-policy.js";
-import { DeadLetterPublicationError, PersistenceUnavailableError, UnsupportedSchemaVersionError } from "./errors.js";
+import { DeadLetterPublicationError, FleetEventPublicationError, PersistenceUnavailableError, UnsupportedSchemaVersionError } from "./errors.js";
 import type {
   BatchCheckpoint,
   Clock,
@@ -13,9 +13,12 @@ import type {
   Sleeper,
   TelemetryRepository,
 } from "./ports.js";
+import { mergeFleetUpdates, type FleetStateUpdater, type FleetUpdate } from "./update-fleet-state.js";
 
 export interface PersistTelemetryBatchDependencies {
   readonly repository: TelemetryRepository;
+  /** Estado de los vehículos y alertas: se actualiza y se publica después de persistir cada tramo (fase 1b). */
+  readonly fleetState: FleetStateUpdater;
   readonly deadLetters: DeadLetterPublisher;
   readonly clock: Clock;
   readonly sleeper: Sleeper;
@@ -118,7 +121,14 @@ type Attempted<T> = { readonly ok: true; readonly value: T } | { readonly ok: fa
  * cota es la retención y NO los 7 días del gateway: el gateway pudo aceptar un punto válido que espere días en Kafka si el
  * processor estuvo caído, y rechazarlo con la cota del gateway sería perder datos aceptados.
  *
- * Sin `vehicle_state`, `vehicle.state` ni `fleet.alerts`: eso es de la fase 1b.
+ * Estado de la flota (fase 1b): con el tramo persistido, `fleetState.apply` actualiza `vehicle_state` y `alerts` en una transacción y
+ * `fleetState.publish` publica `vehicle.state` y `fleet.alerts`, y SOLO entonces se resuelve el offset. Orden de cada tramo: persistir
+ * telemetría -> estado -> publicar eventos -> DLQ -> offset (regla 6). Se aplican TODOS los puntos válidos del tramo, también los
+ * duplicados: en una reentrega no cambian el estado (son tardíos para él) pero hacen que se republique el estado vigente, y así un
+ * crash entre el commit y la publicación no pierde eventos. Sus fallos siguen los mismos criterios que la persistencia: transitorio
+ * (todo lo que no es atribuible a la fila) -> reintentos y, agotados, `PersistenceUnavailableError` sin offset; permanente (clase 22/23)
+ * -> se aísla por vehículo y los mensajes del que falla van a la DLQ como `processing_failed` (su telemetría ya quedó guardada). Si la
+ * publicación falla, `FleetEventPublicationError` y sin offset.
  */
 export function createPersistTelemetryBatch(deps: PersistTelemetryBatchDependencies): PersistTelemetryBatch {
   const { repository, deadLetters, clock, sleeper, random, logger } = deps;
@@ -206,6 +216,64 @@ export function createPersistTelemetryBatch(deps: PersistTelemetryBatchDependenc
     return { persisted, duplicates, failed, stopped: false };
   }
 
+  /**
+   * Actualiza el estado de la flota con las filas ya persistidas. Mismos criterios que `persist`: un fallo permanente de todo el
+   * tramo se aísla por VEHÍCULO (todas las filas de un vehículo viven o mueren juntas: el estado es una sola fila por vehículo), y si
+   * fallan todos los vehículos (con más de uno) es la base y no un mensaje: el error sube sin DLQ.
+   */
+  async function updateFleet(
+    rows: readonly Valid[],
+    context: Record<string, unknown>,
+    checkpoint: BatchCheckpoint,
+  ): Promise<{ update: FleetUpdate; failed: Pending[]; stopped: boolean }> {
+    if (rows.length === 0) return { update: mergeFleetUpdates([]), failed: [], stopped: false };
+    const itemsOf = (subset: readonly Valid[]) => subset.map(({ event, message }) => ({ event, correlationId: message.correlationId }));
+    const fleetContext = { ...context, step: "fleet_state" };
+
+    const whole = await attempt(() => deps.fleetState.apply(itemsOf(rows)), fleetContext, checkpoint);
+    if (whole.ok) return { update: whole.value, failed: [], stopped: false };
+
+    logger.warn({ ...fleetContext, rows: rows.length, failure: describeFailure(whole.error) }, "Fallo permanente del estado de la flota: se aísla por vehículo");
+    const byVehicle = new Map<string, Valid[]>();
+    for (const row of rows) {
+      const group = byVehicle.get(row.event.point.vehicleId);
+      if (group === undefined) byVehicle.set(row.event.point.vehicleId, [row]);
+      else group.push(row);
+    }
+    const updates: FleetUpdate[] = [];
+    const failed: Pending[] = [];
+    let firstFailure: { readonly error: unknown; readonly attempts: number } | undefined;
+    for (const group of byVehicle.values()) {
+      if (!checkpoint.shouldContinue()) return { update: mergeFleetUpdates(updates), failed, stopped: true };
+      const single = await attempt(() => deps.fleetState.apply(itemsOf(group)), fleetContext, checkpoint);
+      if (single.ok) {
+        updates.push(single.value);
+      } else {
+        firstFailure ??= { error: single.error, attempts: single.attempts };
+        for (const row of group) {
+          failed.push({
+            message: row.message,
+            code: "processing_failed",
+            detail: `Falló la actualización del estado del vehículo (${describeFailure(single.error)}).`,
+            attempts: single.attempts,
+            original: row.original,
+            ids: row.ids,
+          });
+        }
+      }
+      await checkpoint.heartbeat();
+    }
+    if (byVehicle.size > 1 && failed.length === rows.length && firstFailure !== undefined) {
+      throw unavailable(
+        firstFailure.attempts,
+        firstFailure.error,
+        { ...fleetContext, rows: rows.length },
+        "Fallaron TODOS los vehículos aislados del tramo: no hay una fila venenosa, es la base. La partición se detiene y el offset no avanza",
+      );
+    }
+    return { update: mergeFleetUpdates(updates), failed, stopped: false };
+  }
+
   const toEntry = (pending: Pending): DeadLetterEntry => ({
     // El vehículo, si se conoce, es la key de la DLQ (mismo orden por vehículo); si no, la key del mensaje original.
     key: pending.ids.vehicleId ?? pending.message.key ?? UNKNOWN_KEY,
@@ -255,6 +323,24 @@ export function createPersistTelemetryBatch(deps: PersistTelemetryBatchDependenc
     }
     pending.push(...persisted.failed);
 
+    // Solo lo que quedó en `telemetry`: una fila que falló al persistir no mueve el estado (va a la DLQ).
+    const notPersisted = new Set(persisted.failed.map((item) => item.message));
+    const fleet = await updateFleet(
+      valid.filter(({ message }) => !notPersisted.has(message)),
+      context,
+      checkpoint,
+    );
+    if (fleet.stopped) {
+      return { persisted: persisted.persisted, duplicates: persisted.duplicates, deadLettered: countByCode([]), stopped: true };
+    }
+    pending.push(...fleet.failed);
+    const publishedEvents = fleet.update.vehicleStates.length + fleet.update.alerts.length;
+    try {
+      await deps.fleetState.publish(fleet.update);
+    } catch (error) {
+      throw new FleetEventPublicationError(publishedEvents, error);
+    }
+
     if (pending.length > 0) {
       const entries = pending.map(toEntry);
       try {
@@ -289,6 +375,7 @@ export function createPersistTelemetryBatch(deps: PersistTelemetryBatchDependenc
         deadLettered,
         tenantIds: [...new Set(valid.map(({ event }) => event.tenantId))].slice(0, MAX_LOGGED_IDS),
         vehicles: new Set(valid.map(({ event }) => event.point.vehicleId)).size,
+        fleet: { ...fleet.update.stats, events: publishedEvents },
       },
       "Tramo de telemetría procesado",
     );

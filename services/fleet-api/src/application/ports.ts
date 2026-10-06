@@ -1,0 +1,157 @@
+import type { Alert, Session, ZoneFeatureCollection, ZoneKind } from "@fleet/contracts";
+import type { AuthIdentity } from "../domain/identity.js";
+import type { ZoneRef } from "../domain/fleet-status.js";
+
+/** Puertos de fleet-api: lo que sus casos de uso necesitan del mundo exterior. */
+
+/** Reloj del servidor. Un puerto, para que los casos de uso no dependan de la hora real en los tests. */
+export interface Clock {
+  now(): Date;
+}
+
+/** Una dependencia cuyo estado informa `GET /health`. La implementación decide qué significa "responde". */
+export interface ReadinessCheck {
+  /** Clave en `checks` de la respuesta (`database`...). */
+  readonly name: string;
+  /**
+   * `true` si la dependencia responde. No lanza: un fallo (o un tiempo agotado) es `false`, y el detalle va al log
+   * del adaptador, nunca a la respuesta.
+   */
+  check(): Promise<boolean>;
+}
+
+// --- Sesión ---
+
+/** Cuenta de un usuario para el login. `passwordHash` es el de `hashPassword`; nunca sale de la capa de aplicación. */
+export interface UserAccount extends AuthIdentity {
+  readonly email: string;
+  readonly name: string;
+  readonly passwordHash: string;
+  readonly tenantName: string;
+}
+
+export interface UserRepository {
+  /** El usuario con ese correo, SIN distinguir mayúsculas, o `null`. Un fallo de la base se propaga (no se confunde con "no existe"). */
+  findByEmail(email: string): Promise<UserAccount | null>;
+  /** Datos de sesión de una identidad ya verificada, o `null` si el usuario ya no existe en ese tenant. */
+  findProfile(identity: AuthIdentity): Promise<Session | null>;
+}
+
+/** Compara una contraseña con su hash en tiempo constante. `false` ante cualquier hash inválido; nunca lanza por eso. */
+export interface PasswordVerifier {
+  verify(password: string, passwordHash: string): Promise<boolean>;
+}
+
+// --- Lecturas del read model (todas filtran por `tenantId`) ---
+
+export interface VehicleStatusCounts {
+  readonly moving: number;
+  readonly stopped: number;
+  readonly noSignal: number;
+}
+
+export interface SummaryReader {
+  /**
+   * Vehículos del tenant por estado. Un vehículo con `received_at` ANTERIOR a `noSignalBefore`, o que nunca reportó (sin fila de
+   * estado), cuenta en `noSignal`; el resto, en su `movement`. Los tres conteos suman los vehículos del tenant.
+   */
+  countVehicleStatus(tenantId: string, noSignalBefore: Date): Promise<VehicleStatusCounts>;
+  /** Alertas activas (sin `resolvedAt`) del tenant. */
+  countActiveAlerts(tenantId: string): Promise<number>;
+}
+
+export interface StoppedVehicleRow {
+  readonly vehicleId: string;
+  readonly plate: string;
+  readonly stoppedSince: Date;
+  readonly lon: number;
+  readonly lat: number;
+  /** Zonas que contienen la posición (las del tipo pedido, si se filtró). */
+  readonly zones: readonly ZoneRef[];
+}
+
+export interface StoppedVehicleQuery {
+  readonly tenantId: string;
+  /** Solo detenidos con `stoppedSince` IGUAL O ANTERIOR a este instante. */
+  readonly stoppedAtOrBefore: Date;
+  /** Solo vehículos con señal: `receivedAt` IGUAL O POSTERIOR a este instante. */
+  readonly signalSince: Date;
+  readonly zoneKind: ZoneKind | undefined;
+  readonly limit: number;
+}
+
+export interface StoppedVehicleReader {
+  /** Detenidos con señal, los que llevan más tiempo primero (`stoppedSince` ascendente, `vehicleId` desempata). A lo sumo `limit`. */
+  findStopped(query: StoppedVehicleQuery): Promise<StoppedVehicleRow[]>;
+}
+
+/** Posición de un keyset de alertas: `raisedAt` con la precisión de la base (microsegundos, ISO UTC) y el `alertId`. */
+export interface AlertCursor {
+  readonly raisedAt: string;
+  readonly alertId: string;
+}
+
+export interface AlertRecord {
+  readonly alert: Alert;
+  /** Posición de ESTA alerta, para continuar después de ella. */
+  readonly cursor: AlertCursor;
+}
+
+export interface AlertQuery {
+  readonly tenantId: string;
+  readonly status: "active" | "all";
+  /** Solo alertas ESTRICTAMENTE después de esta posición en el orden (`raisedAt` desc, `alertId` desc). */
+  readonly after: AlertCursor | undefined;
+  readonly limit: number;
+}
+
+export interface AlertReader {
+  /** De la más reciente a la más antigua, a lo sumo `limit`; la placa y el nombre de la zona salen de un JOIN. */
+  findAlerts(query: AlertQuery): Promise<AlertRecord[]>;
+}
+
+export interface ZoneReader {
+  /** Zonas del tenant como `FeatureCollection` de GeoJSON, coordenadas `[lng, lat]`. Acotado por un tope. */
+  findZones(tenantId: string): Promise<ZoneFeatureCollection>;
+}
+
+// --- Vinculación de dispositivos ---
+
+/** Genera los secretos de la vinculación con un generador criptográfico. Un puerto: el dominio y los tests no dependen de la entropía. */
+export interface PairingCredentials {
+  /** Código de `PAIRING_CODE_LENGTH` caracteres de `PAIRING_CODE_ALPHABET`. */
+  newPairingCode(): string;
+  /** Token de dispositivo con el formato de `deviceTokenSchema` (`fdt_` + 43 caracteres). */
+  newDeviceToken(): string;
+  newDeviceId(): string;
+}
+
+export type CreatePairingCodeResult =
+  | { readonly status: "created"; readonly expiresAt: Date }
+  | { readonly status: "vehicle_not_found" }
+  | { readonly status: "code_collision" };
+
+export interface PairingCodeRepository {
+  /**
+   * Guarda el HASH de un código nuevo para un vehículo del tenant, con vencimiento `ttlMinutes` desde ahora (reloj de la base).
+   * `vehicle_not_found` si el vehículo no es del tenant (nunca revela si existe en otro); `code_collision` si ese hash ya existe.
+   */
+  create(input: { tenantId: string; vehicleId: string; createdBy: string; codeHash: string; ttlMinutes: number }): Promise<CreatePairingCodeResult>;
+}
+
+/** Operaciones del canje, todas dentro de UNA transacción. */
+export interface PairingTransaction {
+  /** Marca el código como usado SI sigue vigente (no usado, no vencido) y devuelve su vehículo; `null` si no. Atómico. */
+  consumeCode(codeHash: string): Promise<{ tenantId: string; vehicleId: string } | null>;
+  /** Bloquea la fila del vehículo (serializa vinculaciones simultáneas del mismo vehículo) y devuelve su placa. */
+  lockVehicle(tenantId: string, vehicleId: string): Promise<{ plate: string } | null>;
+  /** Revoca el dispositivo activo del vehículo, si lo hay. */
+  revokeActiveDevices(tenantId: string, vehicleId: string): Promise<void>;
+  /** Crea el dispositivo con el HASH de su token. Devuelve la hora del servidor de la vinculación. */
+  insertDevice(input: { deviceId: string; tenantId: string; vehicleId: string; tokenHash: string }): Promise<{ createdAt: Date }>;
+}
+
+export interface PairingUnitOfWork {
+  /** Corre `work` en una transacción: la confirma si resuelve y la revierte si lanza. */
+  run<T>(work: (transaction: PairingTransaction) => Promise<T>): Promise<T>;
+}

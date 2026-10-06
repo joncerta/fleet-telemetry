@@ -11,6 +11,15 @@ export const devDataConfigSchema = z.object({
 });
 export type DevDataConfig = z.output<typeof devDataConfigSchema>;
 
+/**
+ * Variables de `db:seed`: la contraseña de los usuarios de demo (`operador@norte.test`, `operador@sur.test`). Solo para local;
+ * en `.env.example` es un placeholder. Se guarda solo su hash scrypt. Mínimo 12 caracteres: aunque sea demo, no se siembra una
+ * contraseña trivial.
+ */
+export const seedConfigSchema = z.object({
+  SEED_USER_PASSWORD: z.string().min(12).max(256),
+});
+
 export interface ResolvedDatabase {
   url: string;
   /** Nombre de la variable de la que salió: sirve para el mensaje y nunca se imprime su valor. */

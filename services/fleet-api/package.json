@@ -1,0 +1,36 @@
+{
+  "name": "@fleet/fleet-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read model REST de la flota (resumen, detenidos, alertas, zonas), sesión por cookie y vinculación de dispositivos. El SSE llega en el paso siguiente.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fleet/contracts": "workspace:*",
+    "@fleet/platform": "workspace:*",
+    "fastify": "^5.12.5",
+    "fastify-type-provider-zod": "^7.0.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@fleet/eslint-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "eslint": "catalog:",
+    "pg": "catalog:",
+    "tsx": "^4.23.15",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

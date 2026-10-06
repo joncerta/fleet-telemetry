@@ -41,6 +41,6 @@
 
 - Métricas del consumer (lag, tamaño de la DLQ, reintentos): no hay infraestructura de métricas todavía.
 - La DLQ del processor conserva solo el `correlationId` de los headers originales, no todos.
-- Un mensaje de `telemetry.raw` cercano al tope del broker (1 MB) no cabría en la DLQ una vez envuelto: la publicación fallaría y el tramo se reentregaría sin fin. El gateway acota cada punto (`INGEST_GATEWAY_MAX_POINT_BYTES`, 8 KB), así que no ocurre en el flujo normal; solo con un productor ajeno. La DLQ del processor publica todo el tramo en un solo envío (sin sub-lotes por tamaño como el gateway): con 500 mensajes de pocos KB cabe, pero no se ha medido con mensajes grandes.
+- Un mensaje de `telemetry.raw` cercano al tope del broker (1 MB) no cabría en la DLQ una vez envuelto: la publicación fallaría y el tramo se reentregaría sin fin. El gateway acota cada punto (`INGEST_GATEWAY_MAX_POINT_BYTES`, 8 KB), así que no ocurre en el flujo normal; solo con un productor ajeno. La DLQ del processor ya publica el tramo en sub-lotes de ~512 KB (decisión 10), así que un tramo grande de rechazos no supera el tope del broker; lo que sigue sin caber es un único mensaje envuelto por encima de ese tope.
 - Un error permanente de la fila con un SQLSTATE fuera de las clases 22 y 23 detiene la partición en vez de ir a la DLQ (consecuencia aceptada de 4): si aparece uno real, se agrega su código a la clasificación con su test.
 - `vehicle_state`, `vehicle.state` y `fleet.alerts`: fase 1b.

@@ -44,3 +44,18 @@ export class DeadLetterPublicationError extends Error {
     this.messages = messages;
   }
 }
+
+/**
+ * No se pudo publicar en `vehicle.state` o `fleet.alerts` (error del broker o tiempo agotado). El estado ya está en la base, pero sin
+ * la publicación confirmada no se resuelve ningún offset del tramo: el lote se reentrega, el estado no cambia (los puntos ya
+ * persistidos son tardíos para él) y se vuelve a publicar el estado vigente, así que ningún evento se pierde.
+ */
+export class FleetEventPublicationError extends Error {
+  readonly events: number;
+
+  constructor(events: number, cause: unknown) {
+    super(`No se pudieron publicar ${events} eventos de la flota.`, { cause });
+    this.name = "FleetEventPublicationError";
+    this.events = events;
+  }
+}

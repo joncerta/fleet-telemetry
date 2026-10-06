@@ -188,3 +188,5 @@ infra/k6/.run/
 
 # Terraform: configuración del backend remoto (bucket y clave KMS; sin credenciales, pero propia de cada persona)
 backend.hcl
+# Worktrees de los subagentes de Claude Code (cada uno es un checkout aparte)
+.claude/worktrees/

@@ -1,6 +1,6 @@
-import { telemetryDlqMessageSchema, type TelemetryRawEvent } from "@fleet/contracts";
+import { telemetryDlqMessageSchema, type TelemetryRawEvent, type VehicleStateEvent } from "@fleet/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DeadLetterPublicationError, PersistenceUnavailableError, UnsupportedSchemaVersionError } from "./errors.js";
+import { DeadLetterPublicationError, FleetEventPublicationError, PersistenceUnavailableError, UnsupportedSchemaVersionError } from "./errors.js";
 import {
   createPersistTelemetryBatch,
   type IncomingMessage,
@@ -9,10 +9,12 @@ import {
 } from "./persist-telemetry-batch.js";
 import type { BackoffPolicy } from "../domain/retry-policy.js";
 import type { BatchCheckpoint, DeadLetterEntry, DeadLetterPublisher, InsertOutcome, ProcessorLogger, Sleeper, TelemetryRepository } from "./ports.js";
+import type { FleetStateUpdater, FleetTelemetry, FleetUpdate } from "./update-fleet-state.js";
 
 const TENANT = "9d7e1b34-2a6c-4f08-b5d3-6e4a8c1f0b92";
 const DEVICE = "5b8a3f6c-1e9d-4a27-8c40-7f2e6d1b9a35";
 const VEHICLE = "a1c4e9d2-7b3f-4c58-8e16-0d9f2b6a4c71";
+const VEHICLE_2 = "b2d5f0e3-8c4a-4d69-9f27-1e0a3c7b5d82";
 const NOW = new Date("2026-03-14T20:05:00.000Z");
 
 const uuidFor = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -96,6 +98,63 @@ class FakeRepository implements TelemetryRepository {
   }
 }
 
+/** Estado de la flota en memoria: devuelve un `vehicle.state` por vehículo tocado y registra lo que recibe, en orden. */
+class FakeFleet implements FleetStateUpdater {
+  readonly applied: (readonly FleetTelemetry[])[] = [];
+  readonly published: FleetUpdate[] = [];
+  /** Devuelve un error para fallar esta llamada de `apply` o `undefined` para dejarla pasar. */
+  applyFailWhen: (items: readonly FleetTelemetry[], callNumber: number) => Error | undefined = () => undefined;
+  publishFailure: Error | undefined;
+  /** Si no es `undefined`, se invoca en cada `publish` antes de registrarlo (un test lo usa para fallar solo la segunda vez). */
+  onPublish: ((callNumber: number) => Error | undefined) | undefined;
+  private publishCalls = 0;
+
+  constructor(private readonly timeline: Timeline) {}
+
+  apply(items: readonly FleetTelemetry[]): Promise<FleetUpdate> {
+    this.applied.push([...items]);
+    this.timeline.add(`fleet:apply:${items.length}`);
+    const failure = this.applyFailWhen(items, this.applied.length);
+    if (failure !== undefined) return Promise.reject(failure);
+    const vehicles = new Map(items.map(({ event, correlationId }) => [event.point.vehicleId, { tenantId: event.tenantId, correlationId }]));
+    return Promise.resolve({
+      vehicleStates: [...vehicles].map(([vehicleId, { tenantId, correlationId }]) => ({ key: vehicleId, correlationId, event: stateEventOf(vehicleId, tenantId) })),
+      alerts: [],
+      stats: { vehicles: vehicles.size, statesWritten: vehicles.size, alertsRaised: 0, alertsResolved: 0 },
+    });
+  }
+
+  publish(update: FleetUpdate): Promise<void> {
+    this.publishCalls += 1;
+    this.timeline.add("fleet:publish");
+    const failure = this.publishFailure ?? this.onPublish?.(this.publishCalls);
+    if (failure !== undefined) return Promise.reject(failure);
+    this.published.push(update);
+    return Promise.resolve();
+  }
+}
+
+const stateEventOf = (vehicleId: string, tenantId: string): VehicleStateEvent => ({
+  schemaVersion: 1,
+  tenantId,
+  state: {
+    vehicleId,
+    plate: "ABC123",
+    lon: -75.5636,
+    lat: 6.2518,
+    recordedAt: "2026-03-14T19:59:30.000Z",
+    receivedAt: "2026-03-14T20:00:00.000Z",
+    speedMps: 12.5,
+    headingDeg: 90,
+    movement: "moving",
+    stoppedSince: null,
+    zoneIds: [],
+    mocked: false,
+    lowAccuracy: false,
+    seq: "1",
+  },
+});
+
 class FakeDeadLetters implements DeadLetterPublisher {
   readonly published: DeadLetterEntry[] = [];
   readonly calls: DeadLetterEntry[][] = [];
@@ -148,8 +207,20 @@ interface LogLine {
   message: string;
 }
 
-function setup(options: { maxAttempts?: number; chunkSize?: number; random?: number; heartbeatIntervalMs?: number; sleeper?: Sleeper; backoff?: BackoffPolicy } = {}) {
+function setup(
+  options: {
+    maxAttempts?: number;
+    chunkSize?: number;
+    random?: number;
+    heartbeatIntervalMs?: number;
+    sleeper?: Sleeper;
+    backoff?: BackoffPolicy;
+    /** Las llamadas del estado de la flota entran en la línea de tiempo compartida. Por defecto no, para no alterar el orden de los demás tests. */
+    traceFleet?: boolean;
+  } = {},
+) {
   const timeline = new Timeline();
+  const fleet = new FakeFleet(options.traceFleet === true ? timeline : new Timeline());
   const repository = new FakeRepository(timeline);
   const deadLetters = new FakeDeadLetters(timeline);
   const checkpoint = new FakeCheckpoint(timeline);
@@ -162,6 +233,7 @@ function setup(options: { maxAttempts?: number; chunkSize?: number; random?: num
   };
   const persist: PersistTelemetryBatch = createPersistTelemetryBatch({
     repository,
+    fleetState: fleet,
     deadLetters,
     clock: { now: () => NOW },
     sleeper: options.sleeper ?? {
@@ -179,7 +251,7 @@ function setup(options: { maxAttempts?: number; chunkSize?: number; random?: num
     chunkSize: options.chunkSize ?? 500,
   });
   const run = (messages: readonly IncomingMessage[], partition = 0): Promise<PersistReport> => persist({ partition, messages, checkpoint });
-  return { timeline, repository, deadLetters, checkpoint, sleeps, logs, run };
+  return { timeline, repository, fleet, deadLetters, checkpoint, sleeps, logs, run };
 }
 
 const eventIds = (events: readonly TelemetryRawEvent[]) => events.map((event) => event.point.eventId);
@@ -977,4 +1049,242 @@ describe("persistTelemetryBatch", () => {
       expect(JSON.stringify(retry)).not.toMatch(/127\.0\.0\.1/);
     });
   });
+
+  describe("estado de la flota (fase 1b)", () => {
+    const connectionDown = () => connectionError();
+    const constraintViolation = () => Object.assign(new Error("insert or update on table violates foreign key constraint"), { code: "23503" });
+    const forVehicle2 = (items: readonly FleetTelemetry[]) => items.some(({ event }) => event.point.vehicleId === VEHICLE_2);
+
+    it("el orden de cada tramo es: persistir telemetría -> estado -> publicar eventos -> resolver offset -> confirmar", async () => {
+      const { run, timeline } = setup({ traceFleet: true });
+
+      await run([eventMessage(1), eventMessage(2), eventMessage(3)]);
+
+      expect(timeline.events).toEqual(["insert:3", "fleet:apply:3", "fleet:publish", "resolve:103", "commit:103"]);
+    });
+
+    it("cada tramo se actualiza y se publica antes de resolver SU offset", async () => {
+      const { run, timeline } = setup({ chunkSize: 2, traceFleet: true });
+
+      await run([eventMessage(1), eventMessage(2), eventMessage(3)]);
+
+      expect(timeline.events).toEqual([
+        "insert:2",
+        "fleet:apply:2",
+        "fleet:publish",
+        "resolve:102",
+        "commit:102",
+        "insert:1",
+        "fleet:apply:1",
+        "fleet:publish",
+        "resolve:103",
+        "commit:103",
+      ]);
+    });
+
+    it("al estado llegan los puntos persistidos (también los duplicados), cada uno con el correlationId de SU mensaje y el tenant del evento", async () => {
+      const { run, fleet } = setup();
+
+      await run([eventMessage(1, {}, "corr-a"), eventMessage(1, {}, "corr-b"), eventMessage(2, {}, "corr-c")]);
+
+      expect(fleet.applied).toHaveLength(1);
+      expect(fleet.applied[0]?.map((item) => [item.event.point.eventId, item.event.tenantId, item.correlationId])).toEqual([
+        [uuidFor(1), TENANT, "corr-a"],
+        [uuidFor(1), TENANT, "corr-b"],
+        [uuidFor(2), TENANT, "corr-c"],
+      ]);
+    });
+
+    it("lo que no se persistió (inválido, fuera de área, fila venenosa) NO llega al estado, y va a la DLQ", async () => {
+      const { run, fleet, repository, deadLetters } = setup();
+      repository.failWhen = (events) => (events.some((event) => event.point.speedMps === 77.77) ? dataError("23514") : undefined);
+
+      await run([eventMessage(1), eventMessage(2, { speedMps: 77.77 }), rawMessage(103, "{roto"), eventMessage(4, MADRID)]);
+
+      const sentToState = fleet.applied.flatMap((items) => items.map((item) => item.event.point.eventId));
+      expect(new Set(sentToState)).toEqual(new Set([uuidFor(1)]));
+      expect(deadLetters.published).toHaveLength(3);
+    });
+
+    it("publica exactamente lo que devolvió el estado", async () => {
+      const { run, fleet } = setup();
+
+      await run([eventMessage(1, {}, "corr-pub")]);
+
+      expect(fleet.published).toHaveLength(1);
+      expect(fleet.published[0]?.vehicleStates).toEqual([{ key: VEHICLE, correlationId: "corr-pub", event: stateEventOf(VEHICLE, TENANT) }]);
+    });
+
+    it("un tramo sin válidos no toca el estado", async () => {
+      const { run, fleet } = setup();
+
+      await run([rawMessage(101, "{roto"), eventMessage(2, MADRID)]);
+
+      expect(fleet.applied).toEqual([]);
+    });
+
+    it("reentregar el mismo tramo vuelve a pasar los puntos al estado (así se republica lo que quedó sin publicar tras un crash)", async () => {
+      const { run, fleet } = setup();
+      const batch = [eventMessage(1), eventMessage(2)];
+
+      await run(batch);
+      await run(batch);
+
+      expect(fleet.applied).toHaveLength(2);
+      expect(fleet.applied[1]?.map((item) => item.event.point.eventId)).toEqual([uuidFor(1), uuidFor(2)]);
+      expect(fleet.published).toHaveLength(2);
+    });
+
+    describe("fallo de la publicación", () => {
+      it("lanza FleetEventPublicationError con la causa y NO resuelve ni confirma el offset del tramo", async () => {
+        const { run, fleet, checkpoint, repository } = setup();
+        const cause = new Error("el broker no confirmó");
+        fleet.publishFailure = cause;
+
+        const error = await run([eventMessage(1), eventMessage(2)]).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(FleetEventPublicationError);
+        expect(error).toMatchObject({ events: 1, cause });
+        expect(checkpoint.resolved).toEqual([]);
+        expect(checkpoint.committed).toEqual([]);
+        // La telemetría y el estado ya quedaron: la reentrega es idempotente.
+        expect(repository.rows.size).toBe(2);
+      });
+
+      it("el tramo anterior, ya publicado y resuelto, se conserva", async () => {
+        const { run, fleet, checkpoint } = setup({ chunkSize: 1 });
+        fleet.onPublish = (call) => (call === 2 ? new Error("falla") : undefined);
+
+        await expect(run([eventMessage(1), eventMessage(2)])).rejects.toBeInstanceOf(FleetEventPublicationError);
+
+        expect(checkpoint.resolved).toEqual(["101"]);
+      });
+
+      it("no se publica la DLQ del tramo (se reentrega todo junto)", async () => {
+        const { run, fleet, deadLetters } = setup();
+        fleet.publishFailure = new Error("falla");
+
+        await expect(run([eventMessage(1), eventMessage(2, MADRID)])).rejects.toBeInstanceOf(FleetEventPublicationError);
+
+        expect(deadLetters.calls).toEqual([]);
+      });
+    });
+
+    describe("fallos de la base al actualizar el estado", () => {
+      it("un fallo transitorio que se recupera: reintenta con backoff y publica una sola vez", async () => {
+        const { run, fleet, sleeps, checkpoint } = setup();
+        fleet.applyFailWhen = (_items, call) => (call === 1 ? connectionDown() : undefined);
+
+        await run([eventMessage(1)]);
+
+        expect(fleet.applied).toHaveLength(2);
+        expect(sleeps).toEqual([50]);
+        expect(fleet.published).toHaveLength(1);
+        expect(checkpoint.resolved).toEqual(["101"]);
+      });
+
+      it("transitorio agotado: PersistenceUnavailableError, sin publicar, sin DLQ y sin resolver el offset; el log a la vista no lleva datos del mensaje", async () => {
+        const { run, fleet, deadLetters, checkpoint, logs } = setup({ maxAttempts: 2 });
+        fleet.applyFailWhen = () => connectionDown();
+
+        const error = await run([eventMessage(1), rawMessage(102, "{roto")]).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(PersistenceUnavailableError);
+        expect(fleet.applied).toHaveLength(2);
+        expect(fleet.published).toEqual([]);
+        expect(deadLetters.calls).toEqual([]);
+        expect(checkpoint.resolved).toEqual([]);
+        const line = logs.find((entry) => entry.level === "error");
+        expect(line?.fields).toMatchObject({ step: "fleet_state", attempts: 2, failure: "código ECONNREFUSED" });
+        expect(JSON.stringify(logs)).not.toMatch(/75\.5636|6\.2518/);
+      });
+
+      it("un error sin código también es transitorio (falla en cerrado): no va a la DLQ", async () => {
+        const { run, fleet, deadLetters, checkpoint } = setup({ maxAttempts: 1 });
+        fleet.applyFailWhen = () => new Error("algo raro");
+
+        await expect(run([eventMessage(1)])).rejects.toBeInstanceOf(PersistenceUnavailableError);
+
+        expect(deadLetters.calls).toEqual([]);
+        expect(checkpoint.resolved).toEqual([]);
+      });
+
+      it("permanente (clase 23) en UN vehículo de dos: sus mensajes van a la DLQ como processing_failed y el otro vehículo se publica y se resuelve", async () => {
+        const { run, fleet, deadLetters, checkpoint, repository } = setup();
+        fleet.applyFailWhen = (items) => (forVehicle2(items) ? constraintViolation() : undefined);
+
+        const report = await run([eventMessage(1), eventMessage(2, { vehicleId: VEHICLE_2 }, "corr-v2"), eventMessage(3)]);
+
+        // La telemetría de los dos se guardó: lo que falló es la proyección, no el punto.
+        expect(repository.rows.size).toBe(3);
+        expect(report.deadLettered.processing_failed).toBe(1);
+        expect(deadLetters.published).toHaveLength(1);
+        expect(deadLetters.published[0]).toMatchObject({ key: VEHICLE_2, correlationId: "corr-v2" });
+        expect(deadLetters.published[0]?.message).toMatchObject({
+          source: "processor",
+          reason: { code: "processing_failed", message: expect.stringContaining("23503") as string },
+          vehicleId: VEHICLE_2,
+          eventId: uuidFor(2),
+          attempts: 1,
+        });
+        expect(fleet.published).toHaveLength(1);
+        expect(fleet.published[0]?.vehicleStates.map((entry) => entry.key)).toEqual([VEHICLE]);
+        expect(checkpoint.resolved).toEqual(["103"]);
+      });
+
+      it("la razón de la DLQ no cita el mensaje del error de la base (puede traer la fila)", async () => {
+        const { run, fleet, deadLetters } = setup();
+        fleet.applyFailWhen = (items) => (forVehicle2(items) ? constraintViolation() : undefined);
+
+        await run([eventMessage(1), eventMessage(2, { vehicleId: VEHICLE_2 })]);
+
+        expect(JSON.stringify(deadLetters.published)).not.toMatch(/violates foreign key/);
+      });
+
+      it("un solo vehículo en el tramo con fallo permanente SÍ va a la DLQ", async () => {
+        const { run, fleet, deadLetters, checkpoint } = setup();
+        fleet.applyFailWhen = () => constraintViolation();
+
+        await run([eventMessage(1), eventMessage(2)]);
+
+        expect(deadLetters.published.map((entry) => entry.message.reason.code)).toEqual(["processing_failed", "processing_failed"]);
+        expect(checkpoint.resolved).toEqual(["102"]);
+      });
+
+      it("si fallan TODOS los vehículos aislados (con más de uno) no hay un vehículo venenoso: es la base. Sin DLQ y sin resolver", async () => {
+        const { run, fleet, deadLetters, checkpoint } = setup();
+        fleet.applyFailWhen = () => constraintViolation();
+
+        await expect(run([eventMessage(1), eventMessage(2, { vehicleId: VEHICLE_2 })])).rejects.toBeInstanceOf(PersistenceUnavailableError);
+
+        expect(deadLetters.calls).toEqual([]);
+        expect(checkpoint.resolved).toEqual([]);
+      });
+
+      it("pregunta shouldContinue antes de cada vehículo aislado; si da falso sale sin publicar ni resolver", async () => {
+        const { run, fleet, checkpoint, deadLetters } = setup();
+        fleet.applyFailWhen = (_items, call) => (call === 1 ? constraintViolation() : undefined);
+        // 1) antes del tramo; 2) antes del primer vehículo aislado; el tercero (segundo vehículo) ya no.
+        checkpoint.continueFor = 2;
+
+        const report = await run([eventMessage(1), eventMessage(2, { vehicleId: VEHICLE_2 })]);
+
+        expect(report.stopped).toBe(true);
+        expect(fleet.published).toEqual([]);
+        expect(deadLetters.calls).toEqual([]);
+        expect(checkpoint.resolved).toEqual([]);
+      });
+    });
+
+    it("el resumen del tramo incluye los conteos del estado, sin coordenadas", async () => {
+      const { run, logs } = setup();
+
+      await run([eventMessage(1), eventMessage(2, { vehicleId: VEHICLE_2 })]);
+
+      const summary = logs.find((line) => line.level === "info");
+      expect(summary?.fields).toMatchObject({ fleet: { vehicles: 2, statesWritten: 2, alertsRaised: 0, alertsResolved: 0, events: 2 } });
+      expect(JSON.stringify(logs)).not.toMatch(/75\.5636|6\.2518/);
+    });
+  });
+
 });

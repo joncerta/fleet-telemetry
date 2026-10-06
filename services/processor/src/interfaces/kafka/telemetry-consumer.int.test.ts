@@ -23,6 +23,7 @@ import { createPersistTelemetryBatch } from "../../application/persist-telemetry
 import type { TelemetryRepository } from "../../application/ports.js";
 import { createKafkaDeadLetterPublisher } from "../../infrastructure/kafka-dead-letter-publisher.js";
 import { createPgTelemetryRepository } from "../../infrastructure/pg-telemetry-repository.js";
+import { mergeFleetUpdates, type FleetStateUpdater } from "../../application/update-fleet-state.js";
 import { createTelemetryBatchHandler } from "./telemetry-batch-handler.js";
 import { createTelemetryConsumerRunner } from "./telemetry-consumer.js";
 
@@ -85,6 +86,14 @@ function eventOf(scope: Scope, index: number, pointOverrides: Partial<TelemetryR
     },
   };
 }
+
+// Este archivo prueba el consumer, los offsets y la DLQ con telemetría de vehículos que NO existen en `vehicles` (la hypertable no tiene
+// claves foráneas); el estado de la flota exige el vehículo (FK compuesta). Por eso aquí el estado es un no-op: su integración real, con la
+// base y Redpanda, vive en `telemetry-fleet-state.int.test.ts` y en `pg-fleet-state-store.int.test.ts`.
+const noFleetState: FleetStateUpdater = {
+  apply: () => Promise.resolve(mergeFleetUpdates([])),
+  publish: () => Promise.resolve(),
+};
 
 const connectionError = () => Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), { code: "ECONNREFUSED" });
 
@@ -180,6 +189,7 @@ async function withPipeline(options: { chunkSize?: number; restartBackoffMs?: nu
   };
   const persist = createPersistTelemetryBatch({
     repository,
+    fleetState: noFleetState,
     deadLetters: createKafkaDeadLetterPublisher({ producer, timeoutMs: 10_000, topic: dlqTopic.name }),
     clock: { now: () => new Date() },
     sleeper: { sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
