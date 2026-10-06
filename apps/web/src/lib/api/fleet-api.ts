@@ -8,6 +8,7 @@ import {
   vehicleListResponseSchema,
   stoppedVehiclesResponseTolerantSchema,
   zoneFeatureCollectionTolerantSchema,
+  zoneFeatureTolerantSchema,
   type AlertsResponseTolerant,
   type FleetSummary,
   type LoginRequest,
@@ -18,7 +19,9 @@ import {
   type VehicleListResponse,
   type Session,
   type StoppedVehiclesResponseTolerant,
+  type ZoneCreateRequest,
   type ZoneFeatureCollectionTolerant,
+  type ZoneFeatureTolerant,
   type ZoneKind,
 } from "@fleet/contracts";
 import { UnauthorizedError, type HttpClient } from "./http-client";
@@ -34,6 +37,7 @@ export const FLEET_API_PATHS = {
   stoppedVehicles: "/v1/vehicles/stopped",
   alerts: "/v1/alerts",
   zones: "/v1/zones/geojson",
+  zoneCreate: "/v1/zones",
   pairingCodes: "/v1/devices/pairing-codes",
   stream: "/v1/stream",
 } as const;
@@ -58,6 +62,8 @@ export interface FleetApi {
   listVehicles(limit: number, signal?: AbortSignal): Promise<VehicleListResponse>;
   /** Alta de un vehículo. `request` ya debe estar validado y normalizado con `vehicleCreateRequestSchema`. 409 `plate_taken` si la placa existe. */
   createVehicle(request: VehicleCreateRequest, signal?: AbortSignal): Promise<VehicleCatalogItem>;
+  /** Alta de una zona. `request` ya debe estar validado con `zoneCreateRequestSchema`. 409 `zone_name_taken`, 400 `invalid_geometry`. */
+  createZone(request: ZoneCreateRequest, signal?: AbortSignal): Promise<ZoneFeatureTolerant>;
   /** Usuarios del tenant de la sesión, ordenados por nombre (solo lectura). */
   listUsers(limit: number, signal?: AbortSignal): Promise<UserListResponse>;
 }
@@ -104,6 +110,7 @@ export function createFleetApi(http: HttpClient, onUnauthorized: () => void): Fl
       authed(() => http.request(`${FLEET_API_PATHS.vehicles}?${new URLSearchParams({ limit: String(limit) }).toString()}`, { schema: vehicleListResponseSchema, signal })),
     createVehicle: (request, signal) =>
       authed(() => http.request(FLEET_API_PATHS.vehicles, { method: "POST", body: request, schema: vehicleCatalogItemSchema, signal })),
+    createZone: (request, signal) => authed(() => http.request(FLEET_API_PATHS.zoneCreate, { method: "POST", body: request, schema: zoneFeatureTolerantSchema, signal })),
     listUsers: (limit, signal) =>
       authed(() => http.request(`${FLEET_API_PATHS.users}?${new URLSearchParams({ limit: String(limit) }).toString()}`, { schema: userListResponseSchema, signal })),
   };

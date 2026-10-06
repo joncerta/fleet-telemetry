@@ -1,3 +1,4 @@
+import type { ZoneCreateRequest } from "@fleet/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { alert, NOW_ISO, summary, VEHICLE_A } from "../../test-support/fixtures";
 import { createFleetApi, FLEET_API_PATHS } from "./fleet-api";
@@ -132,6 +133,51 @@ describe("fleet-api", () => {
 
     const taken = setup(() => json(409, { error: { code: "plate_taken", message: "x" } }));
     await expect(taken.api.createVehicle({ plate: "ABC123", label: null })).rejects.toMatchObject({ status: 409, code: "plate_taken" });
+  });
+
+  describe("createZone", () => {
+    const request: ZoneCreateRequest = {
+      name: "Bodega Norte",
+      kind: "depot",
+      geometry: {
+        type: "Polygon",
+        coordinates: [
+          [
+            [-74.1, 4.6],
+            [-74.0, 4.6],
+            [-74.0, 4.7],
+            [-74.1, 4.6],
+          ],
+        ],
+      },
+    };
+    const feature = { type: "Feature", geometry: request.geometry, properties: { zoneId: VEHICLE_A, name: "Bodega Norte", kind: "depot" } };
+
+    it("envía POST /v1/zones con credenciales y sin tenantId, y valida el 201", async () => {
+      const { api, calls } = setup(() => json(201, feature));
+      await expect(api.createZone(request)).resolves.toEqual(feature);
+      expect(calls[0]?.url).toBe(`${BASE}/v1/zones`);
+      expect(calls[0]?.init.method).toBe("POST");
+      expect(calls[0]?.init.credentials).toBe("include");
+      expect(bodyOf(calls[0]?.init)).toEqual(request);
+    });
+
+    it("propaga el 409 zone_name_taken y el 400 invalid_geometry", async () => {
+      const taken = setup(() => json(409, { error: { code: "zone_name_taken", message: "x" } }));
+      await expect(taken.api.createZone(request)).rejects.toMatchObject({ status: 409, code: "zone_name_taken" });
+      const invalid = setup(() => json(400, { error: { code: "invalid_geometry", message: "x" } }));
+      await expect(invalid.api.createZone(request)).rejects.toMatchObject({ status: 400, code: "invalid_geometry" });
+    });
+
+    it("una respuesta que no cumple el contrato se descarta (InvalidResponseError)", async () => {
+      const { api } = setup(() => json(201, { type: "Feature", properties: { zoneId: "no-es-uuid" } }));
+      await expect(api.createZone(request)).rejects.toBeInstanceOf(InvalidResponseError);
+    });
+
+    it("un 401 avisa de sesión vencida", async () => {
+      const { api } = setup(() => json(401, { error: { code: "unauthorized", message: "x" } }));
+      await expect(api.createZone(request)).rejects.toBeInstanceOf(UnauthorizedError);
+    });
   });
 
   it("los usuarios se piden con límite y se validan", async () => {
