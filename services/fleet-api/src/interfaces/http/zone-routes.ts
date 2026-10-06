@@ -17,7 +17,7 @@ export interface ZoneRouteDependencies {
  * caso de uso recibe la identidad de la SESIÓN (nunca un tenant de la petición) y la respuesta se serializa con su esquema. El nombre, el
  * polígono y los errores de la base no pasan por los logs: la línea lleva solo identificadores.
  *
- * - `POST /v1/zones`: 201 con el `Feature` de la zona; 409 `zone_name_taken`; 400 `invalid_geometry` (PostGIS) o `invalid_request` (esquema);
+ * - `POST /v1/zones`: 201 con el `Feature` de la zona; 409 `zone_name_taken` o `zone_limit_reached`; 400 `invalid_geometry` (PostGIS) o `invalid_request` (esquema);
  *   401; 415 (solo `application/json`, anti-CSRF como el resto de las escrituras con cookie); 429 (límite por usuario, por IP sin sesión).
  *   La lectura sigue en `GET /v1/zones/geojson` (`registerFleetRoutes`).
  */
@@ -25,9 +25,10 @@ export function registerZoneRoutes(app: FleetApiApp, deps: ZoneRouteDependencies
   app.post(
     ZONES_PATH,
     {
-      // `preParsing` y no `onRequest`: el límite es un hook `onRequest` que el plugin añade DESPUÉS de los `onRequest` de la ruta, y la ruta trae
-      // su propio `config.rateLimit`. Con la sesión en `preParsing` el límite corre después de ella (conoce al usuario) y también cuenta a quien no
-      // tiene sesión, por IP; la sesión se verifica antes de leer el cuerpo.
+      // `preParsing` y no `onRequest`: el límite de abajo es un hook `onRequest` que el plugin añade DESPUÉS de los `onRequest` de la ruta, y
+      // la ruta trae su propio `config.rateLimit`, así que el límite global no la cubre. Con la sesión en `preParsing` el límite corre ANTES (y
+      // cuenta también a quien no tiene sesión, por IP) y la sesión se verifica antes de leer el cuerpo. Como el límite corre antes que la
+      // sesión, `keyGenerator` decodifica la cookie por su cuenta (`identityOf`, sin rechazar) para elegir `user:` o `ip:`.
       preParsing: deps.cookies.requireSession,
       config: {
         rateLimit: {

@@ -1,3 +1,4 @@
+import { COLOMBIA_BBOX } from "@fleet/contracts";
 import { SEED_TENANTS } from "@fleet/dev-data";
 
 /** Rectángulo de una ciudad en grados. Las rutas de sus vehículos no salen de él. */
@@ -13,11 +14,11 @@ export interface City {
 }
 
 /**
- * Espejo del área de operación del processor (`COLOMBIA_BBOX`, regla 13): el simulador nunca debe generar un punto fuera de
- * ella o el processor lo mandaría a la DLQ como `outside_operating_area`. Es un rectángulo, no un polígono (igual que allá).
- * Vive aquí y no se importa porque los servicios no exportan su dominio; los tests comprueban que los puntos caen dentro.
+ * Área de operación (`COLOMBIA_BBOX` de `@fleet/contracts`, regla 13): el simulador nunca debe generar un punto fuera de ella o el
+ * processor lo mandaría a la DLQ como `outside_operating_area`. Es un rectángulo, no un polígono. Misma constante que usa el processor;
+ * los tests comprueban que los puntos caen dentro.
  */
-export const OPERATING_AREA = { minLon: -82.0, maxLon: -66.8, minLat: -4.3, maxLat: 13.6 } as const;
+export const OPERATING_AREA = COLOMBIA_BBOX;
 
 interface CityShape extends Omit<City, "tenantId"> {
   tenantName: string;

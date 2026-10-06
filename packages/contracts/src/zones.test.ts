@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   COLOMBIA_BBOX,
   INVALID_GEOMETRY_ERROR_CODE,
+  isInsideBoundingBox,
+  vehicleCreateRequestSchema,
+  ZONE_LIMIT_REACHED_ERROR_CODE,
+  ZONE_MAX_PER_TENANT,
   ZONE_MAX_VERTICES,
   ZONE_NAME_MAX_LENGTH,
   ZONE_NAME_TAKEN_ERROR_CODE,
@@ -29,6 +33,14 @@ const body = (ring: unknown = square, extra: Record<string, unknown> = {}) => ({
 const NUL = String.fromCharCode(0x0000);
 const RLO = String.fromCharCode(0x202e);
 const ISOLATE = String.fromCharCode(0x2066);
+const ZWSP = String.fromCharCode(0x200b);
+const LRM = String.fromCharCode(0x200e);
+const RLM = String.fromCharCode(0x200f);
+const ALM = String.fromCharCode(0x061c);
+const WORD_JOINER = String.fromCharCode(0x2060);
+const BOM = String.fromCharCode(0xfeff);
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
 
 /** Polígono regular de `vertices` vértices dentro de Colombia, cerrado. */
 function ringOf(vertices: number): number[][] {
@@ -50,6 +62,8 @@ describe("constantes del alta de zonas", () => {
     expect(ZONE_MAX_VERTICES).toBe(200);
     expect(ZONE_NAME_TAKEN_ERROR_CODE).toBe("zone_name_taken");
     expect(INVALID_GEOMETRY_ERROR_CODE).toBe("invalid_geometry");
+    expect(ZONE_LIMIT_REACHED_ERROR_CODE).toBe("zone_limit_reached");
+    expect(ZONE_MAX_PER_TENANT).toBe(1_000);
     expect(COLOMBIA_BBOX).toEqual({ minLon: -82.0, maxLon: -66.8, minLat: -4.3, maxLat: 13.6 });
   });
 });
@@ -177,8 +191,30 @@ describe("zoneCreateRequestSchema", () => {
     ["con salto de línea", "a\nb"],
     ["con bidi RLO", `${RLO}abc`],
     ["con aislamiento bidi", `a${ISOLATE}b`],
+    ["formado solo por U+200B", ZWSP.repeat(3)],
+    ["con U+200B interno", `a${ZWSP}b`],
+    ["con LRM", `a${LRM}b`],
+    ["con RLM", `a${RLM}b`],
+    ["con U+061C", `a${ALM}b`],
+    ["con U+2060", `a${WORD_JOINER}b`],
+    ["con U+FEFF interno", `a${BOM}b`],
+    ["con separador de línea", `a${LINE_SEPARATOR}b`],
+    ["con separador de párrafo", `a${PARAGRAPH_SEPARATOR}b`],
   ])("rechaza un nombre %s", (_label, name) => {
     expect(zoneCreateRequestSchema.safeParse(body(square, { name })).success).toBe(false);
+  });
+
+  it("normaliza el nombre a NFC: compuesto y descompuesto dan el mismo nombre", () => {
+    const nfc = "Depósito".normalize("NFC");
+    const nfd = nfc.normalize("NFD");
+
+    expect(nfc).not.toBe(nfd);
+    expect(zoneCreateRequestSchema.parse(body(square, { name: nfd })).name).toBe(nfc);
+    expect(zoneCreateRequestSchema.parse(body(square, { name: nfc })).name).toBe(nfc);
+  });
+
+  it("un U+FEFF al borde se recorta como espacio, pero uno interno se rechaza", () => {
+    expect(zoneCreateRequestSchema.parse(body(square, { name: `${BOM}Zona` })).name).toBe("Zona");
   });
 
   it("acepta un nombre del largo máximo (tras recortar)", () => {
@@ -210,5 +246,24 @@ describe("zoneFeatureSchema", () => {
 
     expect(zoneFeatureSchema.safeParse(future).success).toBe(false);
     expect(zoneFeatureTolerantSchema.parse(future).properties.kind).toBe("unknown");
+  });
+});
+
+describe("isInsideBoundingBox", () => {
+  it("usa Colombia por defecto, con la longitud primero y los bordes dentro", () => {
+    expect(isInsideBoundingBox(-74.07, 4.71)).toBe(true);
+    expect(isInsideBoundingBox(4.71, -74.07)).toBe(false);
+    expect(isInsideBoundingBox(COLOMBIA_BBOX.minLon, COLOMBIA_BBOX.minLat)).toBe(true);
+    expect(isInsideBoundingBox(COLOMBIA_BBOX.maxLon + 0.001, 4)).toBe(false);
+  });
+});
+
+describe("etiqueta de vehículo con el patrón compartido", () => {
+  it.each([`a${ZWSP}b`, `a${LRM}b`, `a${BOM}b`, `a${ALM}b`])("rechaza la etiqueta %j (formato invisible)", (label) => {
+    expect(vehicleCreateRequestSchema.safeParse({ plate: "ABC123", label }).success).toBe(false);
+  });
+
+  it("sigue aceptando texto normal con acentos", () => {
+    expect(vehicleCreateRequestSchema.parse({ plate: "ABC123", label: "Camión 7 ñandú" }).label).toBe("Camión 7 ñandú");
   });
 });
