@@ -45,10 +45,9 @@ describe("PairingView", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Generar código<\/button>/);
   });
 
-  it("un error del catálogo se avisa con role=alert y ofrece reintentar", () => {
+  it("un error del catálogo ofrece reintentar; el aviso va en el encabezado del panel (panelError), no en el cuerpo", () => {
     const html = render({ catalog: { status: "error", data: null, updatedAt: null, error: "No se pudieron cargar los vehículos." } });
-    expect(html).toContain('role="alert"');
-    expect(html).toContain("No se pudieron cargar los vehículos.");
+    expect(html).not.toContain('role="alert"');
     expect(html).toContain("Reintentar");
   });
 
