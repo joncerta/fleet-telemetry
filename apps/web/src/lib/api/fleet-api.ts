@@ -38,7 +38,7 @@ export interface StoppedVehiclesParams {
 export interface FleetApi {
   /** 401 aquí es "credenciales inválidas", no "sesión vencida": NO avisa a `onUnauthorized`. */
   login(credentials: LoginRequest): Promise<Session>;
-  getSession(): Promise<Session>;
+  getSession(signal?: AbortSignal): Promise<Session>;
   logout(): Promise<void>;
   getSummary(signal?: AbortSignal): Promise<FleetSummary>;
   getAlerts(params: { status: "active" | "all"; limit: number }, signal?: AbortSignal): Promise<AlertsResponseTolerant>;
@@ -65,7 +65,7 @@ export function createFleetApi(http: HttpClient, onUnauthorized: () => void): Fl
   return {
     login: (credentials) => http.request(FLEET_API_PATHS.login, { method: "POST", body: credentials, schema: sessionSchema }),
     // Sin `authed`: el arranque pregunta por la sesión justamente para saber si hay que ir al login.
-    getSession: () => http.request(FLEET_API_PATHS.session, { schema: sessionSchema }),
+    getSession: (signal) => http.request(FLEET_API_PATHS.session, { schema: sessionSchema, signal }),
     logout: () => http.request(FLEET_API_PATHS.logout, { method: "POST", schema: null }),
     getSummary: (signal) => authed(() => http.request(FLEET_API_PATHS.summary, { schema: fleetSummarySchema, signal })),
     getAlerts: ({ status, limit }, signal) =>

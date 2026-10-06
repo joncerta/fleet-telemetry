@@ -11,7 +11,8 @@ const textOf = (value: FormDataEntryValue | null): string => (typeof value === "
 
 /** Ingreso con correo y contraseña. La API deja la cookie de sesión; la web solo guarda (en memoria) la identidad que devuelve. */
 export function LoginScreen() {
-  const { api, sessionStore } = useServices();
+  const services = useServices();
+  const { api } = services;
   const status = useSession((state) => state.status);
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
@@ -37,7 +38,7 @@ export function LoginScreen() {
     setError(null);
     try {
       const session = await api.login(parsed.data);
-      sessionStore.getState().signedIn(session);
+      services.signIn(session);
     } catch (loginError) {
       setError(loginErrorMessage(loginError));
       setSubmitting(false);

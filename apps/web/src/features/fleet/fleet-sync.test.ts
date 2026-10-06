@@ -30,10 +30,12 @@ function setup() {
     getZones: vi.fn<() => Promise<ZoneFeatureCollectionTolerant>>(() => Promise.resolve(zones)),
   };
   const onUnauthorized = vi.fn();
+  const verifyIdentity = vi.fn();
   const sync = createFleetSync({
     api,
     store,
     onUnauthorized,
+    verifyIdentity,
     now: () => NOW_MS,
     flushMs: 200,
     summaryDebounceMs: 2_000,
@@ -46,7 +48,7 @@ function setup() {
     if (callbacks === null) throw new Error("el stream no se abrió");
     return callbacks;
   };
-  return { store, stream, api, onUnauthorized, sync, stream$ };
+  return { store, stream, api, onUnauthorized, verifyIdentity, sync, stream$ };
 }
 
 beforeEach(() => {
@@ -72,6 +74,24 @@ describe("createFleetSync", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(api.getSummary).toHaveBeenCalledTimes(2);
     expect(store.getState().summary.status).toBe("ready");
+  });
+
+  it("cada snapshot verifica la identidad de la sesión y recarga SIEMPRE las zonas (pueden ser de otra sesión tras reconectar)", async () => {
+    const { sync, stream$, api, verifyIdentity } = setup();
+    sync.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.getZones).toHaveBeenCalledTimes(1);
+    expect(verifyIdentity).not.toHaveBeenCalled();
+
+    stream$().onSnapshot(snapshot());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(verifyIdentity).toHaveBeenCalledTimes(1);
+    expect(api.getZones).toHaveBeenCalledTimes(2);
+
+    stream$().onSnapshot(snapshot({ cursor: "180" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(verifyIdentity).toHaveBeenCalledTimes(2);
+    expect(api.getZones).toHaveBeenCalledTimes(3);
   });
 
   it("cada snapshot reemplaza el estado y DESPUÉS vuelve a pedir /v1/alerts, /v1/summary y los detenidos", async () => {

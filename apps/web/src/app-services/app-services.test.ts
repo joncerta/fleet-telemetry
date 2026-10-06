@@ -1,8 +1,9 @@
 import type { Session } from "@fleet/contracts";
+import { SSE_EVENTS } from "@fleet/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UnauthorizedError } from "../lib/api/http-client";
 import { NOW_MS, snapshot, vehicleState } from "../test-support/fixtures";
-import { createAppServices } from "./app-services";
+import { createAppServices, SESSION_CHANNEL_NAME, type SessionChannelLike } from "./app-services";
 
 const env = { fleetApiUrl: "http://api.test", agentUrl: "http://agent.test", mapStyleUrl: "https://tiles.test/style" };
 const session: Session = {
@@ -15,21 +16,57 @@ const unauthorized = () => new Response(JSON.stringify({ error: { code: "unautho
 class RecordingEventSource {
   static opened: { url: string; init: EventSourceInit | undefined; source: RecordingEventSource }[] = [];
   closed = false;
+  readonly listeners = new Map<string, ((event: Event) => void)[]>();
   constructor(url: string, init?: EventSourceInit) {
     RecordingEventSource.opened.push({ url, init, source: this });
   }
-  addEventListener(): void {}
+  addEventListener(type: string, listener: (event: Event) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  emit(type: string, data: unknown): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(new MessageEvent(type, { data: JSON.stringify(data) }));
+  }
   close(): void {
     this.closed = true;
   }
 }
 
+/** Canal entre pestañas falso: `deliver` simula el mensaje de otra pestaña; `posted` guarda lo que esta publica. */
+class FakeSessionChannel implements SessionChannelLike {
+  posted: unknown[] = [];
+  onmessage: ((event: MessageEvent<unknown>) => void) | null = null;
+  closed = false;
+  postMessage(message: unknown): void {
+    this.posted.push(message);
+  }
+  close(): void {
+    this.closed = true;
+  }
+  deliver(data: unknown): void {
+    this.onmessage?.(new MessageEvent("message", { data }));
+  }
+}
+
 function withSessionAndData() {
-  const services = createAppServices(env);
+  const channel = new FakeSessionChannel();
+  const names: string[] = [];
+  const services = createAppServices(env, {
+    createSessionChannel: (name) => {
+      names.push(name);
+      return channel;
+    },
+  });
+  expect(names).toEqual([SESSION_CHANNEL_NAME]);
   services.sessionStore.getState().signedIn(session);
   services.fleetStore.getState().applySnapshot(snapshot({ vehicles: [vehicleState()] }), NOW_MS);
-  return services;
+  return Object.assign(services, { channel });
 }
+
+const jsonOf = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const otherTenantSession: Session = {
+  user: { userId: "0f9a7c1e-0000-4000-8000-000000000002", email: "operador@sur.test", name: "Operador Sur" },
+  tenant: { tenantId: "f1ee7000-0000-4000-8000-000000000002", name: "Flota Sur" },
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -81,5 +118,68 @@ describe("createAppServices", () => {
     expect(RecordingEventSource.opened[0]?.source.closed).toBe(true);
     expect(services.sessionStore.getState().status).toBe("anonymous");
     expect(services.fleetStore.getState().vehicles).toEqual({});
+  });
+
+  it("un mensaje de otra pestaña (cerró sesión o entró otro usuario) borra los datos, cierra el stream y lleva al login", () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))));
+    const services = withSessionAndData();
+    services.fleetSync.acquire();
+
+    services.channel.deliver({ type: "otra-cosa" });
+    expect(services.sessionStore.getState().status).toBe("authenticated");
+
+    services.channel.deliver({ type: "session-changed" });
+    expect(services.sessionStore.getState()).toMatchObject({ status: "anonymous", session: null });
+    expect(services.fleetStore.getState()).toMatchObject({ ready: false, vehicles: {}, alerts: {} });
+    expect(RecordingEventSource.opened[0]?.source.closed).toBe(true);
+  });
+
+  it("signIn y signOut avisan a las demás pestañas; sin canal (sin BroadcastChannel) funcionan igual", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(null, { status: 204 }))));
+    const services = withSessionAndData();
+    services.signIn(session);
+    expect(services.channel.posted).toEqual([{ type: "session-changed" }]);
+    await services.signOut();
+    expect(services.channel.posted).toHaveLength(2);
+
+    const alone = createAppServices(env, { createSessionChannel: () => null });
+    alone.signIn(session);
+    expect(alone.sessionStore.getState().status).toBe("authenticated");
+    await alone.signOut();
+    expect(alone.sessionStore.getState().status).toBe("anonymous");
+  });
+
+  it("si al llegar un snapshot la identidad de la cookie cambió (otro usuario o tenant), borra el store y va al login", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => (url.endsWith("/v1/auth/session") ? Promise.resolve(jsonOf(200, otherTenantSession)) : Promise.reject(new TypeError("Failed to fetch")))),
+    );
+    const services = withSessionAndData();
+    services.fleetSync.acquire();
+
+    RecordingEventSource.opened[0]?.source.emit(SSE_EVENTS.snapshot, snapshot({ vehicles: [vehicleState({ plate: "SUR101" })] }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(services.sessionStore.getState()).toMatchObject({ status: "anonymous", session: null });
+    expect(services.fleetStore.getState()).toMatchObject({ ready: false, vehicles: {} });
+    expect(RecordingEventSource.opened[0]?.source.closed).toBe(true);
+  });
+
+  it("si la identidad sigue igual, el snapshot se conserva; si la verificación no responde, tampoco se borra nada", async () => {
+    const fetchMock = vi.fn((url: string) => (url.endsWith("/v1/auth/session") ? Promise.resolve(jsonOf(200, session)) : Promise.reject(new TypeError("Failed to fetch"))));
+    vi.stubGlobal("fetch", fetchMock);
+    const services = withSessionAndData();
+    services.fleetSync.acquire();
+
+    RecordingEventSource.opened[0]?.source.emit(SSE_EVENTS.snapshot, snapshot({ vehicles: [vehicleState({ plate: "NRT202" })] }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(services.sessionStore.getState().status).toBe("authenticated");
+    expect(Object.values(services.fleetStore.getState().vehicles).map((vehicle) => vehicle.plate)).toEqual(["NRT202"]);
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/v1/auth/session"))).toBe(true);
+
+    fetchMock.mockImplementation(() => Promise.reject(new TypeError("Failed to fetch")));
+    RecordingEventSource.opened[0]?.source.emit(SSE_EVENTS.snapshot, snapshot({ vehicles: [vehicleState({ plate: "NRT203" })] }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(services.sessionStore.getState().status).toBe("authenticated");
   });
 });

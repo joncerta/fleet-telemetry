@@ -16,6 +16,8 @@ export interface FleetSyncOptions {
   store: StoreApi<FleetStore>;
   openStream: (callbacks: FleetStreamCallbacks) => FleetStreamHandle;
   onUnauthorized: () => void;
+  /** Se llama tras aplicar cada snapshot: confirma que la sesión (usuario y tenant) sigue siendo la que abrió el dashboard. */
+  verifyIdentity?: () => void;
   now?: () => number;
   /** Los eventos se acumulan y se aplican juntos cada `flushMs`: un `set` por lote, no por evento. */
   flushMs?: number;
@@ -125,7 +127,8 @@ export function createFleetSync(options: FleetSyncOptions): FleetSync {
     void loadAlerts();
     void loadSummary();
     void loadStopped();
-    if (store().zones.status !== "ready") void loadZones();
+    // Siempre: las zonas son del tenant, y tras una reconexión podrían ser las de otra sesión.
+    void loadZones();
   };
 
   const callbacks: FleetStreamCallbacks = {
@@ -135,6 +138,7 @@ export function createFleetSync(options: FleetSyncOptions): FleetSync {
       clearTimeout(flushTimer);
       flushTimer = undefined;
       store().applySnapshot(snapshot, now());
+      options.verifyIdentity?.();
       resync();
     },
     onVehicleState(state) {
