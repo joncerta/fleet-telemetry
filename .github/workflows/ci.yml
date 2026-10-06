@@ -83,6 +83,9 @@ jobs:
       LOG_LEVEL: info
       # Contraseña de los usuarios de demo que siembra db:seed (los e2e de fleet-api hacen login con ellos).
       SEED_USER_PASSWORD: ci-ephemeral-user
+      # compose interpola también los servicios del perfil `app` (aunque aquí solo se levanta la infraestructura) y fleet-api lo exige.
+      # Los e2e usan el suyo propio (tests/e2e/harness.ts). >= 32 bytes.
+      SESSION_SECRET: ci-ephemeral-session-secret-0123456789abcdef
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
