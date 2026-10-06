@@ -43,11 +43,6 @@ variable "ecr_repository_arns" {
   type        = list(string)
 }
 
-variable "secret_arns" {
-  description = "ARN de los secretos de Secrets Manager que las tareas inyectan como variables de entorno."
-  type        = list(string)
-}
-
 variable "log_retention_days" {
   description = "Retención de los logs de las tareas en días (valor admitido por CloudWatch Logs)."
   type        = number
@@ -71,10 +66,16 @@ variable "sse_heartbeat_interval_seconds" {
   default     = 30
 }
 
-variable "alb_idle_timeout_seconds" {
-  description = "Idle timeout del ALB (60 s por defecto en AWS, insuficiente para SSE). Debe ser >= 2 x el heartbeat del SSE."
+variable "backend_keep_alive_timeout_seconds" {
+  description = "Keep-alive del servidor HTTP de los servicios (Fastify cierra las conexiones ociosas a los 72 s por defecto). El idle timeout del ALB debe ser menor."
   type        = number
-  default     = 120
+  default     = 72
+}
+
+variable "alb_idle_timeout_seconds" {
+  description = "Idle timeout del ALB. Debe cumplir 2 x heartbeat del SSE <= valor < keep-alive del backend (65 s con 30 s de heartbeat y 72 s de keep-alive); lo exigen dos precondiciones."
+  type        = number
+  default     = 65
 
   validation {
     condition     = var.alb_idle_timeout_seconds >= 1 && var.alb_idle_timeout_seconds <= 4000
@@ -92,7 +93,9 @@ variable "services" {
   description = <<-EOT
     Servicios de larga duración. Con container_port van detrás del ALB (health_check_path, listener_priority y path_patterns
     son obligatorios en ese caso); sin él solo consumen de Kafka. task_policy_json es la política IAM de la tarea (mínimo
-    privilegio); null = sin permisos AWS. secrets: variable de entorno => valueFrom de Secrets Manager.
+    privilegio); null = sin permisos AWS. secrets: variable de entorno => valueFrom de Secrets Manager (el rol de ejecución de la tarea
+    puede leer solo los secretos que aparecen aquí). health_check_command es el healthcheck del CONTENEDOR y health_check_path el del
+    target group: ambos deben usar LIVENESS (sin dependencias), nunca readiness; ver README.
   EOT
   type = map(object({
     image                = string

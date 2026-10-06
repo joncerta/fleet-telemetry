@@ -43,7 +43,8 @@ const tokenFile = JSON.parse(open(TOKENS_FILE));
 const fleet = tokenFile.vehicles.slice(0, Number(__ENV.VEHICLES || tokenFile.vehicles.length));
 const vehicleIds = fleet.map((entry) => entry.vehicleId);
 
-// Contadores por categoría (lo que se ENVIÓ y fue respondido con 202) y lo que dijo el ACK.
+// Contadores por categoría. `sent_*`: lo que se CONSTRUYÓ y envió (se cuenta al enviar). `ack_*` y `response_400`: lo que RESPONDIÓ el
+// gateway (se cuenta de la respuesta). Independientes entre sí: la verificación los compara.
 const sentBatches = new Counter("sent_batches");
 const sentPoints = new Counter("sent_points");
 const sentValidUnique = new Counter("sent_valid_unique");
@@ -51,6 +52,8 @@ const sentDuplicateOtherBatch = new Counter("sent_duplicate_other_batch");
 const sentDuplicateSameBatch = new Counter("sent_duplicate_same_batch");
 const sentEdgeInvalid = new Counter("sent_edge_invalid");
 const sentOutsideArea = new Counter("sent_outside_area");
+// eventId distintos que el generador espera ver en `accepted` de cada lote (válidos + duplicados + fuera de Colombia).
+const sentExpectedAccepted = new Counter("sent_expected_accepted");
 const sentBrokenEnvelope = new Counter("sent_broken_envelope");
 const ackAccepted = new Counter("ack_accepted");
 const ackRejected = new Counter("ack_rejected");
@@ -153,6 +156,23 @@ export function ingest(data) {
   const { v, k } = locate(n, vehicleIds.length);
   const batch = buildBatch(contextFor(data), ns, v, k);
 
+  // LO ENVIADO se cuenta aquí, al enviar y antes de mirar la respuesta; LO OBSERVADO (ack_*, response_400), de la respuesta. Son
+  // contadores independientes: la verificación los compara entre sí (si uno se derivara del otro, la comparación sería tautológica).
+  if (batch.broken) {
+    sentBatches.add(1);
+    sentBrokenEnvelope.add(1);
+  } else {
+    const c = batch.counts;
+    sentBatches.add(1);
+    sentPoints.add(c.points);
+    sentValidUnique.add(c.validUnique);
+    sentDuplicateOtherBatch.add(c.duplicateOtherBatch);
+    sentDuplicateSameBatch.add(c.duplicateSameBatch);
+    sentEdgeInvalid.add(c.edgeInvalid);
+    sentOutsideArea.add(c.outside);
+    sentExpectedAccepted.add(batch.expectedAccepted.size);
+  }
+
   const response = http.post(`${BASE_URL}/v1/telemetry/batches`, batch.body, {
     headers: {
       Authorization: `Bearer ${fleet[v].token}`,
@@ -164,14 +184,12 @@ export function ingest(data) {
   });
   latency.add(response.timings.duration);
 
+  // Observado: toda respuesta 400 que dio el gateway, sea del lote que sea.
+  if (response.status === 400) response400.add(1);
+
   if (batch.broken) {
     const ok = check(response, { "envelope roto responde 400": (r) => r.status === 400 }, { category: "broken_envelope" });
-    if (ok) {
-      sentBrokenEnvelope.add(1);
-      response400.add(1);
-    } else {
-      unexpectedErrors.add(1);
-    }
+    if (!ok) unexpectedErrors.add(1);
     return;
   }
 
@@ -195,8 +213,12 @@ export function ingest(data) {
     return;
   }
 
+  // Observado: lo que dice el ACK (eventId distintos aceptados), antes de compararlo con lo esperado del lote.
   const accepted = new Set(ack.accepted);
   const rejected = new Set(ack.rejected.map((item) => item.eventId));
+  ackAccepted.add(accepted.size);
+  ackRejected.add(rejected.size);
+
   const acceptedOk = check(response, { "aceptados = válidos + duplicados + fuera de Colombia": () => sameSet(batch.expectedAccepted, accepted) }, { category: "accepted" });
   const rejectedOk = check(
     response,
@@ -206,21 +228,7 @@ export function ingest(data) {
     },
     { category: "rejected" },
   );
-  if (!acceptedOk || !rejectedOk) {
-    unexpectedErrors.add(1);
-    return;
-  }
-
-  const c = batch.counts;
-  sentBatches.add(1);
-  sentPoints.add(c.points);
-  sentValidUnique.add(c.validUnique);
-  sentDuplicateOtherBatch.add(c.duplicateOtherBatch);
-  sentDuplicateSameBatch.add(c.duplicateSameBatch);
-  sentEdgeInvalid.add(c.edgeInvalid);
-  sentOutsideArea.add(c.outside);
-  ackAccepted.add(ack.accepted.length);
-  ackRejected.add(ack.rejected.length);
+  if (!acceptedOk || !rejectedOk) unexpectedErrors.add(1);
 }
 
 const COUNTERS = [
@@ -231,6 +239,7 @@ const COUNTERS = [
   "sent_duplicate_same_batch",
   "sent_edge_invalid",
   "sent_outside_area",
+  "sent_expected_accepted",
   "sent_broken_envelope",
   "ack_accepted",
   "ack_rejected",

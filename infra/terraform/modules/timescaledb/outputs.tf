@@ -8,7 +8,7 @@ output "private_dns" {
   value       = aws_instance.this.private_dns
 }
 
-output "secret_arn" {
-  description = "ARN del secreto con las credenciales y URLs (claves: postgres_password, fleet_app_password, fleet_ro_password, admin_url, app_url, ro_url)."
-  value       = aws_secretsmanager_secret.db.arn
+output "secret_arns" {
+  description = "ARN de los secretos por rol: admin (postgres_password, fleet_app_password, fleet_ro_password, admin_url), app (app_url) y ro (ro_url)."
+  value       = { for name, secret in aws_secretsmanager_secret.db : name => secret.arn }
 }

@@ -1,5 +1,5 @@
 # Sin perfil: solo infraestructura (timescaledb, redpanda, redpanda-init).
-# Perfil `app`: además migrate (un solo uso), ingest-gateway y processor. fleet-api, agent y web se agregan cuando existan.
+# Perfil `app`: además migrate (un solo uso), ingest-gateway, processor y fleet-api. agent y web se agregan cuando existan.
 # Nunca `docker compose down -v`: borra el volumen de datos.
 name: fleet-telemetry
 
@@ -96,7 +96,9 @@ services:
   # toman de .env o del entorno; si no están definidas, el servicio usa su valor por defecto (ver .env.example).
 
   # Aplica las migraciones con el superusuario y queda inactivo y healthy (mismo patrón que redpanda-init: `up --wait`
-  # falla en compose v5.3 si un contenedor sale durante la espera). Si la migración falla, sale con error y `up` falla.
+  # falla en compose v5.3 si un contenedor sale durante la espera). `set -eu` hace que el script termine con el código de
+  # error del comando de migración y NO llegue a `touch`: el healthcheck nunca pasa, el contenedor sale y `up --wait` falla.
+  # Sin `set -eu`, `sh -c` seguía tras el fallo, creaba /tmp/migrated y `up --wait` terminaba en éxito con el esquema sin migrar.
   migrate:
     profiles: ["app"]
     image: fleet-telemetry/migrate:local
@@ -119,6 +121,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        set -eu
         rm -f /tmp/migrated
         node packages/platform/dist/cli/migrate.js
         touch /tmp/migrated
@@ -166,6 +169,7 @@ services:
       INGEST_GATEWAY_TOKEN_CACHE_TTL_MS:
       INGEST_GATEWAY_TOKEN_CACHE_NEGATIVE_TTL_MS:
       INGEST_GATEWAY_TOKEN_CACHE_MAX_ENTRIES:
+      INGEST_GATEWAY_MAX_IN_FLIGHT_AUTH_LOOKUPS:
       INGEST_GATEWAY_FUTURE_TOLERANCE_MS:
       INGEST_GATEWAY_MAX_AGE_MS:
       INGEST_GATEWAY_MAX_POINT_BYTES:
@@ -214,6 +218,63 @@ services:
       PROCESSOR_RETRY_MAX_DELAY_MS:
       PROCESSOR_INSERT_CHUNK_SIZE:
       PROCESSOR_DLQ_PUBLISH_TIMEOUT_MS:
+      PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS:
+      ALERT_CRITICAL_STOP_MINUTES:
+      STOP_SPEED_THRESHOLD_MPS:
+      STOP_DISPLACEMENT_THRESHOLD_M:
+
+  # REST + SSE. Lee la base (fleet_app) y consume vehicle.state y fleet.alerts. Cada réplica que alimenta SSE recibe todos los
+  # eventos: no comparte consumer group (lo gestiona el servicio). /health consulta la base (sirve para compose y e2e); en AWS el
+  # ALB y ECS usan /health/live, sin dependencias (ver infra/CLAUDE.md). SESSION_SECRET sale de .env (>= 32 bytes).
+  fleet-api:
+    profiles: ["app"]
+    image: fleet-telemetry/fleet-api:local
+    build:
+      context: .
+      dockerfile: infra/docker/service.Dockerfile
+      target: service
+      args:
+        SERVICE: fleet-api
+    depends_on:
+      redpanda-init:
+        condition: service_healthy
+      migrate:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "127.0.0.1:4002:4002"
+    environment:
+      FLEET_API_HOST: "0.0.0.0"
+      FLEET_API_PORT: "4002"
+      DATABASE_URL: "postgres://fleet_app:${FLEET_APP_PASSWORD:?Falta FLEET_APP_PASSWORD, copia .env.example a .env}@timescaledb:5432/fleet"
+      KAFKA_BROKERS: "redpanda:9092"
+      SESSION_SECRET: "${SESSION_SECRET:?Falta SESSION_SECRET (>= 32 bytes), copia .env.example a .env}"
+      FLEET_API_CORS_ORIGINS: "${FLEET_API_CORS_ORIGINS:-http://localhost:3000}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      SHUTDOWN_TIMEOUT_MS: "${SHUTDOWN_TIMEOUT_MS:-15000}"
+      SESSION_TTL_HOURS:
+      FLEET_API_COOKIE_SECURE:
+      SSE_HEARTBEAT_MS:
+      FLEET_API_TRUSTED_PROXY_HOPS:
+      FLEET_API_RATE_LIMIT_MAX:
+      FLEET_API_RATE_LIMIT_WINDOW_MS:
+      FLEET_API_LOGIN_FAILURE_LIMIT_MAX:
+      FLEET_API_LOGIN_FAILURE_LIMIT_WINDOW_MS:
+      FLEET_API_PAIR_FAILURE_LIMIT_MAX:
+      FLEET_API_PAIR_FAILURE_LIMIT_WINDOW_MS:
+      FLEET_API_PAIRING_CODE_TTL_MINUTES:
+    healthcheck:
+      # La imagen no trae curl: `fetch` de Node. /health responde 503 si falta la base.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4002/health',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
 volumes:
   timescaledb-data:

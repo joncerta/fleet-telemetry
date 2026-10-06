@@ -1,6 +1,6 @@
 // Lanzador de una corrida de carga: k6 + caos opcional + verificación de conteos. SOLO LOCAL.
 //
-//   node --env-file-if-exists=.env infra/k6/scripts/run.mjs [--profile smoke|load] [--chaos processor-restart [--chaos-after 12]]
+//   node --env-file-if-exists=.env infra/k6/scripts/run.mjs [--profile smoke|load] [--chaos processor-restart|processor-outage|processor-kill [--chaos-after 12]]
 //                                                            [--vehicles 300] [--seed 42] [--run-id <id>]
 //
 // Pasos: (1) setup del tenant de carga si faltan los tokens, (2) comprueba /health del gateway, (3) k6, con el caos en paralelo si se
@@ -20,7 +20,9 @@ function arg(name, fallback) {
 
 const profile = arg("--profile", "smoke");
 const chaosAction = arg("--chaos", undefined);
-const chaosAfter = Number(arg("--chaos-after", profile === "load" ? "60" : "12"));
+// Momento por defecto: a mitad de la carga estable; `processor-kill` cae dentro de la ráfaga offline (humo: 10-18 s; load: 90-110 s).
+const defaultChaosAfter = chaosAction === "processor-kill" ? (profile === "load" ? "95" : "12") : profile === "load" ? "60" : "12";
+const chaosAfter = Number(arg("--chaos-after", defaultChaosAfter));
 const seed = arg("--seed", "42");
 const vehicles = arg("--vehicles", undefined);
 const runId = arg("--run-id", `r${Date.now().toString(36)}`);

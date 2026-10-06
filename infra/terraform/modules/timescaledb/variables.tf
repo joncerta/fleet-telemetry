@@ -82,3 +82,14 @@ variable "secret_recovery_window_days" {
   type        = number
   default     = 7
 }
+
+variable "credentials_version" {
+  description = "Versión de las credenciales (entero >= 1). Subirla reescribe las contraseñas en los tres secretos (rotación); ver el README, sección Rotación."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.credentials_version >= 1 && var.credentials_version == floor(var.credentials_version) && var.credentials_version < 100
+    error_message = "credentials_version debe ser un entero entre 1 y 99."
+  }
+}
