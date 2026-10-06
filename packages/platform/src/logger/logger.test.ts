@@ -34,7 +34,7 @@ describe("redacción de datos personales (regla 14)", () => {
     "position", "location", "coordinates", "coords",
     "driver", "driverId", "driverName", "driver_name", "driverLicense", "conductor", "conductorName", "DriverPhone",
     "geom", "geometry", "point", "wkt", "geojson", "GeoJSON", "plate", "Plate", "placa", "PLACA", "address", "direccion",
-    "DRIVERNAME", "driver-name", "licensePlate",
+    "DRIVERNAME", "driver-name", "licensePlate", "label", "Label", "name", "email", "Email", "EMAIL",
   ])("redacta `%s` en el nivel raíz", (key) => {
     const { logger, entries } = setup();
 

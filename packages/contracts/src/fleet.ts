@@ -461,3 +461,99 @@ export const devicePairResponseTolerantSchema = devicePairResponseOf(
   z.string().startsWith(DEVICE_TOKEN_PREFIX).min(DEVICE_TOKEN_PREFIX.length + 1),
 );
 export type DevicePairResponseTolerant = z.infer<typeof devicePairResponseTolerantSchema>;
+
+/**
+ * Catálogo de vehículos y listado de usuarios del tenant (alta desde el dashboard). Todo v1 y ADITIVO: esquemas nuevos, ningún
+ * esquema existente cambia. No hay enums que puedan crecer, así que no tienen variante tolerante. El `tenantId` NUNCA viaja en estos
+ * cuerpos ni consultas: sale de la sesión (regla 4).
+ */
+
+/** Código de `apiErrorSchema` de `POST /v1/vehicles` (409) cuando la placa ya existe en el tenant. Desde v1. */
+export const PLATE_TAKEN_ERROR_CODE = "plate_taken";
+
+/** Máximo de la etiqueta (alias) de un vehículo al darlo de alta. */
+export const VEHICLE_LABEL_MAX_LENGTH = 64;
+
+/**
+ * Forma de una placa CANÓNICA: letras y dígitos en mayúsculas, sin espacios ni guiones (`ABC123`, `ABC12D`). Al normalizar se quitan los
+ * espacios y los guiones, así que `ABC-123`, `ABC 123` y `abc123` son LA MISMA placa y se guardan como `ABC123`.
+ */
+const PLATE_PATTERN = /^[A-Z0-9]+$/;
+
+/** Etiqueta sin caracteres de control (Cc) ni de dirección bidi (U+202A-202E, U+2066-2069): un NUL rompe el INSERT y los bidi falsean lo que se ve. */
+const LABEL_PATTERN = /^[^\p{Cc}\u202A-\u202E\u2066-\u2069]*$/u;
+
+/** Vehículo del catálogo del tenant (con o sin datos de telemetría). Desde v1. */
+export const vehicleCatalogItemSchema = z.object({
+  vehicleId: z.uuid().describe("Identificador del vehículo. Desde v1."),
+  plate: z.string().min(1).max(32).describe("DATO PERSONAL (Ley 1581). Placa, única dentro del tenant. Desde v1."),
+  label: z
+    .string()
+    .min(1)
+    .nullable()
+    .describe("DATO PERSONAL (Ley 1581). Nombre visible o alias del vehículo, o null si no tiene. Desde v1."),
+  hasActiveDevice: z.boolean().describe("Tiene un dispositivo vinculado y no revocado (puede enviar telemetría). Desde v1."),
+  createdAt: datetime("Cuándo se dio de alta el vehículo (hora del servidor). Desde v1."),
+});
+export type VehicleCatalogItem = z.infer<typeof vehicleCatalogItemSchema>;
+
+/** Querystring de `GET /v1/vehicles`. Llega como texto: los números se convierten. Entrada del servidor. Desde v1. */
+export const vehicleListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(200).describe("Máximo de vehículos devueltos (1 a 500). Por defecto 200. Desde v1."),
+});
+export type VehicleListQuery = z.infer<typeof vehicleListQuerySchema>;
+
+/** Respuesta de `GET /v1/vehicles`: el catálogo del tenant ordenado por placa. Desde v1. */
+export const vehicleListResponseSchema = z.object({
+  items: z.array(vehicleCatalogItemSchema).describe("Vehículos del tenant, ordenados por placa. A lo sumo `limit`. Desde v1."),
+  limit: z.number().int().min(1).max(500).describe("Tope aplicado a esta consulta. Si `items` tiene `limit` elementos puede haber más. Desde v1."),
+});
+export type VehicleListResponse = z.infer<typeof vehicleListResponseSchema>;
+
+/**
+ * Cuerpo de `POST /v1/vehicles` (alta). Desde v1. La placa se NORMALIZA al parsear: se recorta, pasa a mayúsculas y se le quitan los
+ * espacios y los guiones; el resultado debe cumplir `^[A-Z0-9]+$`, de 1 a 32 caracteres (`abc-123` y `ABC 123` dan `ABC123`). La
+ * etiqueta es opcional: se recorta, admite hasta 64 caracteres sin caracteres de control ni bidi, y una vacía (o ausente, o null) se
+ * guarda como null. Responde `201` con `vehicleCatalogItemSchema`, o `409 plate_taken`.
+ */
+export const vehicleCreateRequestSchema = z.object({
+  plate: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .overwrite((value) => value.replace(/[\s-]+/g, ""))
+    .min(1)
+    .max(32)
+    .regex(PLATE_PATTERN, { error: "la placa son solo letras y dígitos (se ignoran espacios y guiones)" })
+    .describe("DATO PERSONAL (Ley 1581). Placa canónica: mayúsculas, sin espacios ni guiones. Única dentro del tenant. Desde v1."),
+  label: z
+    .string()
+    .trim()
+    .max(VEHICLE_LABEL_MAX_LENGTH)
+    .regex(LABEL_PATTERN, { error: "la etiqueta no admite caracteres de control ni de dirección de texto" })
+    .nullish()
+    .transform((value) => (value === undefined || value === null || value === "" ? null : value))
+    .describe("DATO PERSONAL (Ley 1581). Nombre visible o alias, opcional; vacío equivale a null. Desde v1."),
+});
+export type VehicleCreateRequest = z.infer<typeof vehicleCreateRequestSchema>;
+
+/** Usuario del tenant en el listado. Desde v1. Nunca incluye la contraseña ni su hash. */
+export const userListItemSchema = z.object({
+  userId: z.uuid().describe("Identificador del usuario. Desde v1."),
+  name: z.string().min(1).describe("DATO PERSONAL (Ley 1581). Nombre para mostrar. Desde v1."),
+  email: z.string().min(1).describe("DATO PERSONAL (Ley 1581). Correo del usuario. Desde v1."),
+  createdAt: datetime("Cuándo se creó el usuario (hora del servidor). Desde v1."),
+});
+export type UserListItem = z.infer<typeof userListItemSchema>;
+
+/** Querystring de `GET /v1/users`. Entrada del servidor. Desde v1. */
+export const userListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(100).describe("Máximo de usuarios devueltos (1 a 500). Por defecto 100. Desde v1."),
+});
+export type UserListQuery = z.infer<typeof userListQuerySchema>;
+
+/** Respuesta de `GET /v1/users`: usuarios del tenant de la sesión, ordenados por nombre. Solo lectura. Desde v1. */
+export const userListResponseSchema = z.object({
+  items: z.array(userListItemSchema).describe("Usuarios del tenant, ordenados por nombre. A lo sumo `limit`. Desde v1."),
+});
+export type UserListResponse = z.infer<typeof userListResponseSchema>;

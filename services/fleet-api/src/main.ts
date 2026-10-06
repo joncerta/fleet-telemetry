@@ -1,14 +1,17 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { TOPICS } from "@fleet/contracts";
 import { createConsumer, createKafka, createLogger, createPool, createSessionCodec, hashPassword, installGracefulShutdown, sha256Hex, verifyPassword } from "@fleet/platform";
 import { createCheckHealth } from "./application/check-health.js";
 import { createFleetEventHub } from "./application/fleet-event-hub.js";
 import { createCreatePairingCode } from "./application/create-pairing-code.js";
+import { createCreateVehicle } from "./application/create-vehicle.js";
 import { createGetFleetSummary } from "./application/get-fleet-summary.js";
 import { createGetSession } from "./application/get-session.js";
 import { createGetZonesGeoJson } from "./application/get-zones-geojson.js";
 import { createListAlerts } from "./application/list-alerts.js";
 import { createListStoppedVehicles } from "./application/list-stopped-vehicles.js";
+import { createListUsers } from "./application/list-users.js";
+import { createListVehicles } from "./application/list-vehicles.js";
 import { createLogin } from "./application/login.js";
 import { createOpenFleetStream } from "./application/open-fleet-stream.js";
 import { createPairDevice } from "./application/pair-device.js";
@@ -18,10 +21,13 @@ import { createFixedWindowFailureCounter } from "./infrastructure/fixed-window-f
 import { createPgFleetReadRepository } from "./infrastructure/pg-fleet-read-repository.js";
 import { createPgFleetSnapshotReader } from "./infrastructure/pg-fleet-snapshot-reader.js";
 import { createPgPairingCodeRepository, createPgPairingUnitOfWork } from "./infrastructure/pg-pairing.js";
+import { createPgTenantUserReader } from "./infrastructure/pg-tenant-users.js";
 import { createPgUserRepository } from "./infrastructure/pg-user-repository.js";
+import { createPgVehicleCatalogRepository } from "./infrastructure/pg-vehicle-catalog.js";
 import { createDatabaseCheck, createFeedCheck } from "./infrastructure/readiness.js";
 import { registerAuthRoutes } from "./interfaces/http/auth-routes.js";
 import { buildApp } from "./interfaces/http/build-app.js";
+import { registerCatalogRoutes } from "./interfaces/http/catalog-routes.js";
 import { registerDeviceRoutes } from "./interfaces/http/device-routes.js";
 import { registerFleetRoutes } from "./interfaces/http/fleet-routes.js";
 import { registerStreamRoute } from "./interfaces/http/stream-route.js";
@@ -56,6 +62,7 @@ const sessionCookies = createSessionCookies({
 });
 
 const readRepository = createPgFleetReadRepository(pool);
+const vehicleCatalog = createPgVehicleCatalogRepository(pool);
 const clock = { now: () => new Date() };
 
 // SSE: cada réplica consume vehicle.state y fleet.alerts con un grupo PROPIO (regla 6), desde el final, y reparte en memoria por tenant. No hay
@@ -110,6 +117,13 @@ const app = await buildApp({
       listStoppedVehicles: createListStoppedVehicles({ reader: readRepository, clock }),
       listAlerts: createListAlerts({ reader: readRepository }),
       getZonesGeoJson: createGetZonesGeoJson({ reader: readRepository }),
+    });
+    registerCatalogRoutes(instance, {
+      cookies: sessionCookies,
+      listVehicles: createListVehicles({ catalog: vehicleCatalog }),
+      createVehicle: createCreateVehicle({ catalog: vehicleCatalog, newVehicleId: randomUUID }),
+      listUsers: createListUsers({ users: createPgTenantUserReader(pool) }),
+      createRateLimit: { max: config.FLEET_API_VEHICLE_CREATE_RATE_LIMIT_MAX, timeWindowMs: config.FLEET_API_VEHICLE_CREATE_RATE_LIMIT_WINDOW_MS },
     });
     registerStreamRoute(instance, {
       cookies: sessionCookies,

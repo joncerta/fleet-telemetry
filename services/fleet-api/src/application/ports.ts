@@ -1,4 +1,15 @@
-import type { Alert, Session, SseAlertTolerant, SseSnapshotTolerant, SseVehicleStateTolerant, VehicleState, ZoneFeatureCollection, ZoneKind } from "@fleet/contracts";
+import type {
+  Alert,
+  Session,
+  SseAlertTolerant,
+  SseSnapshotTolerant,
+  SseVehicleStateTolerant,
+  UserListItem,
+  VehicleCatalogItem,
+  VehicleState,
+  ZoneFeatureCollection,
+  ZoneKind,
+} from "@fleet/contracts";
 import type { AuthIdentity } from "../domain/identity.js";
 import type { ZoneRef } from "../domain/fleet-status.js";
 import type { FleetStreamEvent } from "../domain/stream-ordering.js";
@@ -114,6 +125,27 @@ export interface AlertReader {
 export interface ZoneReader {
   /** Zonas del tenant como `FeatureCollection` de GeoJSON, coordenadas `[lng, lat]`. Acotado por un tope. */
   findZones(tenantId: string): Promise<ZoneFeatureCollection>;
+}
+
+// --- Catálogo de vehículos y usuarios del tenant (todo filtra por `tenantId`) ---
+
+export type CreateVehicleResult =
+  | { readonly status: "created"; readonly vehicle: VehicleCatalogItem }
+  | { readonly status: "plate_taken" };
+
+export interface VehicleCatalogRepository {
+  /** Vehículos del tenant ordenados por placa (`id` desempata), a lo sumo `limit`. `hasActiveDevice`: tiene un dispositivo sin revocar. */
+  list(tenantId: string, limit: number): Promise<VehicleCatalogItem[]>;
+  /**
+   * Inserta el vehículo en el tenant. `plate_taken` si la placa ya existe en ESE tenant (la unicidad es por tenant). Un fallo de la base
+   * se propaga. El vehículo nuevo no tiene dispositivo (`hasActiveDevice: false`).
+   */
+  create(input: { tenantId: string; vehicleId: string; plate: string; label: string | null }): Promise<CreateVehicleResult>;
+}
+
+export interface TenantUserReader {
+  /** Usuarios del tenant ordenados por nombre (`userId` desempata), a lo sumo `limit`. Nunca devuelve el hash de la contraseña. */
+  listUsers(tenantId: string, limit: number): Promise<UserListItem[]>;
 }
 
 // --- Vinculación de dispositivos ---

@@ -1,6 +1,6 @@
-import type { ApiError } from "@fleet/contracts";
+import { PLATE_TAKEN_ERROR_CODE, type ApiError } from "@fleet/contracts";
 import { hasZodFastifySchemaValidationErrors, isResponseSerializationError } from "fastify-type-provider-zod";
-import { InvalidCredentialsError, InvalidPairingCodeError, ServerDrainingError, SessionInvalidError, VehicleNotFoundError } from "../../application/errors.js";
+import { InvalidCredentialsError, InvalidPairingCodeError, PlateTakenError, ServerDrainingError, SessionInvalidError, VehicleNotFoundError } from "../../application/errors.js";
 import { InvalidCursorError } from "./alert-cursor.js";
 
 export interface MappedError {
@@ -62,6 +62,7 @@ function codeOf(error: unknown): string | undefined {
  * - cursor de paginación inválido -> `400 invalid_cursor`;
  * - credenciales inválidas o sesión que ya no vale -> `401 unauthorized` (el mismo, sin distinguir el motivo);
  * - vehículo ajeno o inexistente -> `404 not_found`;
+ * - placa ya existente en el tenant -> `409 plate_taken` (sin la placa en el mensaje);
  * - réplica apagándose (sin streams nuevos) -> `503 shutting_down` con `Retry-After`;
  * - código de vinculación inexistente, usado o vencido -> `404 invalid_pairing_code` (el mismo para los tres);
  * - errores de Fastify con código conocido o estado 4xx -> su código de API;
@@ -73,6 +74,7 @@ export function mapError(error: unknown): MappedError {
   if (error instanceof InvalidCursorError) return apiError(400, "invalid_cursor", "El cursor de paginación no es válido.");
   if (error instanceof InvalidCredentialsError || error instanceof SessionInvalidError) return UNAUTHORIZED();
   if (error instanceof VehicleNotFoundError) return NOT_FOUND();
+  if (error instanceof PlateTakenError) return apiError(409, PLATE_TAKEN_ERROR_CODE, "Ya existe un vehículo con esa placa.");
   if (error instanceof ServerDrainingError) {
     return { ...apiError(503, "shutting_down", "El servidor se está reiniciando. Reintenta en unos segundos."), headers: { "retry-after": String(DRAINING_RETRY_AFTER_SECONDS) } };
   }
