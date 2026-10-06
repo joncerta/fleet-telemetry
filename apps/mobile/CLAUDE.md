@@ -9,15 +9,19 @@ Estas reglas complementan el `CLAUDE.md` de la raíz. El agente que trabaja aqu�
 ## Parámetros (no inventar otros)
 | Parámetro | Valor |
 |---|---|
-| Captura | cada 5 s o 10 m, lo que ocurra primero, solo con turno activo |
+| Captura | latido cada 5 s con `distanceInterval = 0` (también detenido: el processor calcula la detención con esos puntos), solo con turno activo. Mejora futura: intervalo adaptativo para ahorrar batería |
 | Precisión mínima | 50 m; los puntos peores se guardan marcados como `lowAccuracy`, no se descartan |
 | Lote | hasta 200 puntos o el máximo que defina el contrato, lo que sea menor |
 | Backoff | exponencial con jitter completo, de 1 s a 60 s; se reinicia tras un envío exitoso |
 | Lease de `in_flight` | 60 s |
 | Tope de la cola | 50 000 puntos; al llegar, se descartan los más viejos y se cuentan |
+| Drain desde la tarea en segundo plano | como mucho cada 15 s (`PARAMS.periodicSyncMs`); un fix cada 5 s no manda un POST por punto |
+| Lote de prueba tras `401`/`403` | cada 5 min (`PARAMS.unauthorizedProbeMs`); un `202` reanuda el sync solo |
  
 ## Identidad del dispositivo
 - El dispositivo se **vincula** una vez con un código de vinculación de los datos sembrados; recibe un token ligado a un vehículo y a su tenant.
+- Vinculación: el conductor teclea el código de 8 caracteres y la app llama `POST /v1/devices/pair` de fleet-api (`EXPO_PUBLIC_FLEET_API_URL`); el `vehicleId` va en `meta` y el token en secure-store. Re-vincular no termina el turno.
+- Build: sin `APP_VARIANT=development` el build es de producción (sin HTTP en claro) y, fuera de `__DEV__`, `EXPO_PUBLIC_INGEST_URL` y `EXPO_PUBLIC_FLEET_API_URL` son obligatorias y `https://`.
 - El token vive en `expo-secure-store`, nunca en SQLite, AsyncStorage ni variables `EXPO_PUBLIC_*`.
 - El vehículo sale del token: no hay un campo editable de ID de vehículo. El gateway toma el tenant del token, nunca del payload.
 ## Captura (expo-location)
@@ -44,8 +48,8 @@ Estas reglas complementan el `CLAUDE.md` de la raíz. El agente que trabaja aqu�
 |---|---|
 | `202` con ACK válido | borrar los `eventId` de `accepted`; mover los de `rejected` a la tabla `rejected` con su motivo; lo que no venga en ninguna lista vuelve a `pending` |
 | `202` cuyo cuerpo no pasa el schema del ACK | no borrar nada; vuelve a `pending` y se registra el error |
-| `400` (envelope roto: bug del cliente) | mover el lote a `dead` con el motivo, no reintentar en bucle, mostrarlo en diagnóstico |
-| `401` / `403` | no borrar nada; pausar el sync y mostrar "dispositivo no vinculado" |
+| `400` (envelope roto: bug del cliente) | mover **un solo lote** a `dead` con `http_400:<code>` y **pausar** el sync (`client_error`, visible en diagnóstico); se levanta con una versión nueva de la app o con `resume()`. Nunca seguir reclamando lotes: vaciaría la cola |
+| `401` / `403` | no borrar nada; pausar el sync (`unauthorized`) y mostrar "dispositivo no vinculado"; cada 5 min un lote de prueba y, con `202`, se reanuda. "Sin token" no se persiste: se deduce de las credenciales |
 | `413` | partir el lote a la mitad y reintentar |
 | `429` | no borrar nada; esperar `Retry-After` |
 | `5xx`, timeout o sin red | no borrar nada; backoff con jitter |

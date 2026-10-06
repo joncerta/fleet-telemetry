@@ -18,6 +18,7 @@
     "db:rollback": "tsx --env-file-if-exists=.env packages/platform/src/cli/rollback.ts",
     "db:status": "tsx --env-file-if-exists=.env packages/platform/src/cli/status.ts",
     "db:seed": "tsx --env-file-if-exists=.env tools/dev-data/src/cli/seed.ts",
+    "simulate": "tsx --env-file-if-exists=.env tools/simulator/src/main.ts",
     "device:token": "tsx --env-file-if-exists=.env tools/dev-data/src/cli/device-token.ts"
   },
   "devDependencies": {

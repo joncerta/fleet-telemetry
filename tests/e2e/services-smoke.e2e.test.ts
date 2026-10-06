@@ -163,7 +163,7 @@ describe("processor levantado desde dist/", () => {
 describe("logs de los servicios", () => {
   it("quedan en un archivo por servicio en la carpeta de la corrida", () => {
     expect(existsSync(logDir)).toBe(true);
-    expect(readdirSync(logDir).sort()).toEqual(["fleet-api.log", "ingest-gateway.log", "processor.log"]);
+    expect(readdirSync(logDir).sort()).toEqual(["agent.log", "fleet-api.log", "ingest-gateway.log", "processor.log"]);
     expect(existsSync(join(logDir, "ingest-gateway.log"))).toBe(true);
   });
 });
