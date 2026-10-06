@@ -1,10 +1,11 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useFleet, useServices } from "../../app-services/services-context";
 import { Panel, PanelNote } from "../../components/panel";
 import { formatTime } from "../../lib/format";
-import { ALERT_TYPE_LABELS, announceNewAlerts, buildAlertFeed, type AlertGroup, type AlertSeverity, type Announcement } from "./alert-feed";
+import { createAlertAnnouncer } from "./alert-announcer";
+import { ALERT_TYPE_LABELS, buildAlertFeed, type AlertGroup, type AlertSeverity, type Announcement } from "./alert-feed";
 
 /** Grupos visibles; el resto queda resumido en "y N más". */
 const VISIBLE_GROUPS = 30;
@@ -66,28 +67,15 @@ export function AlertList({ groups, onSelect }: { groups: readonly AlertGroup[];
 function useAlertAnnouncements(): Announcement {
   const { fleetStore } = useServices();
   const [announcement, setAnnouncement] = useState<Announcement>({ polite: null, assertive: null });
-  const seen = useRef<Set<string> | null>(null);
 
-  useEffect(
-    () =>
-      fleetStore.subscribe((state, previous) => {
-        if (!state.ready) {
-          seen.current = null;
-          return;
-        }
-        if (state.alerts === previous.alerts && seen.current !== null) return;
-        const alerts = Object.values(state.alerts);
-        // Las que trae el primer snapshot ya estaban: se marcan como vistas sin anunciarlas.
-        if (seen.current === null) {
-          seen.current = new Set(alerts.map((alert) => alert.alertId));
-          return;
-        }
-        const next = announceNewAlerts(seen.current, alerts);
-        for (const alert of alerts) seen.current.add(alert.alertId);
-        if (next.polite !== null || next.assertive !== null) setAnnouncement(next);
-      }),
-    [fleetStore],
-  );
+  useEffect(() => {
+    const announcer = createAlertAnnouncer();
+    announcer.observe(fleetStore.getState());
+    return fleetStore.subscribe((state) => {
+      const next = announcer.observe(state);
+      if (next !== null) setAnnouncement(next);
+    });
+  }, [fleetStore]);
 
   return announcement;
 }

@@ -22,6 +22,7 @@ import {
   zonesSource,
 } from "./map-layers";
 import { MapLegend } from "./MapLegend";
+import { createLoadWatchdog, createRenderScheduler } from "./render-scheduler";
 import { statusIcons } from "./status-icons";
 import { toVehicleFeatures } from "./vehicle-features";
 
@@ -93,9 +94,6 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
     /** Fuentes y capas añadidas: se puede llamar a `setData`. */
     let loaded = false;
     let vehiclesLoaded = false;
-    let vehiclesTimer: ReturnType<typeof setTimeout> | undefined;
-    let renderTimer: ReturnType<typeof setTimeout> | undefined;
-    let lastRenderAt = 0;
     let renderedZones: FleetStore["zones"]["data"] = null;
     let criticalZoneIds = criticalZoneIdsOf(null);
     let renderedSelection: string | null = null;
@@ -104,8 +102,6 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
     const zonesSource$ = () => map.getSource<GeoJSONSource>(SOURCE_IDS.zones);
 
     const render = () => {
-      renderTimer = undefined;
-      lastRenderAt = Date.now();
       const state = fleetStore.getState();
       if (state.zones.data !== renderedZones) {
         renderedZones = state.zones.data;
@@ -116,10 +112,15 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
       void vehiclesSource$()?.setData(toVehicleFeatures(state.vehicles, serverNowIso, criticalZoneIds));
     };
 
-    const scheduleRender = () => {
-      if (!loaded || renderTimer !== undefined) return;
-      renderTimer = setTimeout(render, Math.max(0, lastRenderAt + RENDER_INTERVAL_MS - Date.now()));
-    };
+    const scheduler = createRenderScheduler({ intervalMs: RENDER_INTERVAL_MS, tickMs: STATUS_TICK_MS, render });
+    const scheduleRender = () => scheduler.request();
+    const vehiclesWatchdog = createLoadWatchdog({
+      timeoutMs: VEHICLES_LOAD_TIMEOUT_MS,
+      onTimeout: () => {
+        logWarn("La capa de vehículos del mapa no cargó");
+        setVehiclesState("error");
+      },
+    });
 
     /** La selección (desde la lista o el mapa) se aplica al momento, sin esperar el lote: resalta y centra el vehículo. */
     const applySelection = () => {
@@ -136,7 +137,6 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
       if (state.selectedVehicleId !== previous.selectedVehicleId) applySelection();
       if (state.vehicles !== previous.vehicles || state.zones !== previous.zones || state.serverOffsetMs !== previous.serverOffsetMs) scheduleRender();
     });
-    const tick = setInterval(scheduleRender, STATUS_TICK_MS);
 
     const onLoad = () => {
       styleLoaded = true;
@@ -146,19 +146,15 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
       for (const layer of [zoneFillLayer, zoneLineLayer, clustersLayer, clusterCountLayer, selectedLayer, vehiclesLayer]) map.addLayer(layer);
       loaded = true;
       setMapState("ready");
-      render();
+      scheduler.start();
       applySelection();
-      vehiclesTimer = setTimeout(() => {
-        if (vehiclesLoaded) return;
-        logWarn("La capa de vehículos del mapa no cargó");
-        setVehiclesState("error");
-      }, VEHICLES_LOAD_TIMEOUT_MS);
+      vehiclesWatchdog.start();
     };
 
     const onSourceData = map.on("sourcedata", (event) => {
       if (event.sourceId !== SOURCE_IDS.vehicles || !event.isSourceLoaded || vehiclesLoaded) return;
       vehiclesLoaded = true;
-      clearTimeout(vehiclesTimer);
+      vehiclesWatchdog.markLoaded();
       setVehiclesState("ready");
     });
 
@@ -194,9 +190,8 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
 
     return () => {
       unsubscribeStore();
-      clearInterval(tick);
-      clearTimeout(renderTimer);
-      clearTimeout(vehiclesTimer);
+      scheduler.dispose();
+      vehiclesWatchdog.dispose();
       for (const subscription of [onClick, onClusterClick, onError, onSourceData, ...pointerSubscriptions]) subscription.unsubscribe();
       map.remove();
     };
