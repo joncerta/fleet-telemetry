@@ -45,7 +45,10 @@ test("aislamiento: Norte y Sur logueados a la vez; lo de Norte llega a Norte y n
     await fleet.send(NORTE_ISOLATION, { mocked: true, speedMps: 9 });
     const mockedAlert = alertList(norte.page)
       .getByRole("listitem")
-      .filter({ hasText: `Ubicación simulada · ${NORTE_ISOLATION}` });
+      .filter({ hasText: `Ubicación simulada · ${NORTE_ISOLATION}` })
+      // La base acumula el historial de corridas anteriores (resueltas, y la lista muestra las últimas 50): solo cuenta la alerta ACTIVA,
+      // que es la de esta corrida porque los puntos reales de arriba (y del `finally` de la corrida previa) resolvieron cualquier otra.
+      .filter({ hasText: "Activa" });
     await expect(mockedAlert).toHaveCount(1);
 
     // Recién ahora, con la prueba de que el evento de Norte ya se distribuyó, Sur no tiene nada de Norte.
