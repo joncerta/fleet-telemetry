@@ -1,0 +1,3 @@
+# Turborepo reescribe su bloque de AGENTS.md con LF; fijar LF evita que el archivo aparezca
+# modificado con fines de linea mezclados en checkouts con core.autocrlf=true (Windows).
+AGENTS.md text eol=lf
