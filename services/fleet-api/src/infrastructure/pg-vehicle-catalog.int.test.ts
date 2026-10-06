@@ -30,11 +30,11 @@ describe("createPgVehicleCatalogRepository.create", () => {
     const tenantId = await seed.tenant();
     const vehicleId = randomUUID();
 
-    const result = await catalog().create({ tenantId, vehicleId, plate: "ABC-123", label: "Camión 7" });
+    const result = await catalog().create({ tenantId, vehicleId, plate: "ABC123", label: "Camión 7" });
 
     expect(result.status).toBe("created");
     if (result.status !== "created") return;
-    expect(result.vehicle).toMatchObject({ vehicleId, plate: "ABC-123", label: "Camión 7", hasActiveDevice: false });
+    expect(result.vehicle).toMatchObject({ vehicleId, plate: "ABC123", label: "Camión 7", hasActiveDevice: false });
     expect(Number.isNaN(Date.parse(result.vehicle.createdAt))).toBe(false);
     const stored = await db.pool.query<{ tenant_id: string }>("SELECT tenant_id FROM vehicles WHERE id = $1", [vehicleId]);
     expect(stored.rows[0]?.tenant_id).toBe(tenantId);

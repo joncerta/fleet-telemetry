@@ -139,19 +139,33 @@ describe("catálogo de vehículos: alta y vinculación", () => {
 
   it("una placa repetida en el tenant responde 409 plate_taken sin la placa; la misma placa en otro tenant es válida", async () => {
     const plate = plateOf("B2");
-    expect((await createVehicle(norteCookie, { plate })).status).toBe(201);
+    // La placa es canónica: `ABC-123`, `abc 123` y `ABC123` son la misma.
+    const withDash = `${plate.slice(0, 3)}-${plate.slice(3)}`;
+    const withSpace = `${plate.slice(0, 3)} ${plate.slice(3)}`.toLowerCase();
+    const first = await createVehicle(norteCookie, { plate: withDash });
+    expect(first.status).toBe(201);
+    expect(vehicleCatalogItemSchema.parse(await first.json()).plate).toBe(plate);
 
-    const duplicate = await createVehicle(norteCookie, { plate: plate.toLowerCase() });
-
-    expect(duplicate.status).toBe(409);
-    const text = await duplicate.text();
-    expect(apiErrorSchema.parse(JSON.parse(text)).error.code).toBe("plate_taken");
-    expect(text).not.toContain(plate);
+    for (const duplicateBody of [{ plate: withSpace }, { plate }]) {
+      const duplicate = await createVehicle(norteCookie, duplicateBody);
+      expect(duplicate.status).toBe(409);
+      const text = await duplicate.text();
+      expect(apiErrorSchema.parse(JSON.parse(text)).error.code).toBe("plate_taken");
+      expect(text).not.toContain(plate);
+    }
     expect((await createVehicle(surCookie, { plate })).status).toBe(201);
   });
 
   it("un cuerpo inválido responde 400 y no crea nada; un tenantId del cuerpo se ignora", async () => {
-    for (const body of [{}, { plate: "AB CD" }, { plate: "" }, { plate: "A".repeat(33) }, { plate: "ABC123", label: "x".repeat(65) }]) {
+    for (const body of [
+      {},
+      { plate: " - " },
+      { plate: "" },
+      { plate: "A".repeat(33) },
+      { plate: "ABC123", label: "x".repeat(65) },
+      { plate: "ABC123", label: "a\u0000b" },
+      { plate: "ABC123", label: "\u202Eabc" },
+    ]) {
       const response = await createVehicle(norteCookie, body);
       expect(response.status).toBe(400);
       expect(apiErrorSchema.parse(await response.json()).error.code).toBe("invalid_request");
