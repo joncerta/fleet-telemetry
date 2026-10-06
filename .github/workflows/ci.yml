@@ -2,6 +2,9 @@ name: CI
 
 # CI del backend. Los nombres de los jobs (`verify`, `integration`) son los checks obligatorios
 # en la protección de ramas de `develop` y `master`: no los renombres sin actualizarla.
+# El job `infra` valida lo que cambia en `infra/` y `docker-compose.yml` (pruebas de k6, perfil `app` de compose con un
+# humo de k6 y su verificación de conteos, y Terraform por Docker). Para que bloquee el merge hay que agregarlo
+# como check obligatorio en la protección de ramas (lo hace el humano).
 on:
   pull_request:
     branches: [develop, master]
@@ -137,5 +140,136 @@ jobs:
         with:
           name: compose-logs
           path: compose-logs.txt
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Infraestructura: pruebas de k6, perfil `app` de compose con un humo de k6 y su verificación de conteos, y Terraform por Docker
+  # (sin instalar nada en el runner; las mismas imágenes que se usan en local). Nada se despliega: Terraform solo fmt, validate,
+  # tflint y trivy.
+  infra:
+    name: infra
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # Credenciales efímeras del runner (placeholders de .env.example), no son secretos.
+      POSTGRES_USER: fleet
+      POSTGRES_PASSWORD: ci-ephemeral-postgres
+      FLEET_APP_PASSWORD: ci-ephemeral-app
+      FLEET_RO_PASSWORD: ci-ephemeral-ro
+      DATABASE_URL: postgres://fleet_app:ci-ephemeral-app@127.0.0.1:5432/fleet
+      DATABASE_RO_URL: postgres://fleet_ro:ci-ephemeral-ro@127.0.0.1:5432/fleet
+      KAFKA_BROKERS: 127.0.0.1:19092
+      LOG_LEVEL: info
+      # >= 32 bytes (fleet-api no arranca con menos).
+      SESSION_SECRET: ci-ephemeral-session-secret-0123456789abcdef
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Cache Turborepo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-infra-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-infra-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Los scripts de k6 usan @fleet/platform y @fleet/contracts ya compilados.
+      - name: Build
+        run: pnpm build
+
+      # Node 24 trata un directorio como archivo: se pasa un glob.
+      - name: k6 model and checks tests
+        run: node --test "infra/k6/lib/*.test.mjs"
+
+      # --- Terraform por Docker. Primero tflint y trivy (antes de `init`, que deja .terraform con los proveedores) ---
+      - name: Terraform fmt
+        run: docker run --rm -v "$PWD:/work" -w /work/infra/terraform hashicorp/terraform:1.16.5 fmt -check -recursive
+
+      - name: tflint
+        run: >
+          docker run --rm -v "$PWD:/work" -w /work/infra/terraform ghcr.io/terraform-linters/tflint:v0.64.0
+          --recursive --config /work/infra/terraform/.tflint.hcl
+
+      - name: trivy config
+        run: >
+          docker run --rm -v "$PWD/infra/terraform:/src:ro" aquasec/trivy:0.75.0
+          config --severity LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 /src
+
+      # Sin backend (no hay estado ni credenciales) y con el archivo de bloqueo en solo lectura: si cambia un proveedor sin actualizar
+      # .terraform.lock.hcl, falla.
+      - name: Terraform init and validate
+        run: |
+          for root in bootstrap envs/dev envs/dev-topics; do
+            echo "::group::terraform $root"
+            docker run --rm -v "$PWD:/work" -w "/work/infra/terraform/$root" hashicorp/terraform:1.16.5 init -backend=false -input=false -lockfile=readonly
+            docker run --rm -v "$PWD:/work" -w "/work/infra/terraform/$root" hashicorp/terraform:1.16.5 validate
+            echo "::endgroup::"
+          done
+
+      # --- Perfil `app` de compose + humo de k6 con su verificación de conteos ---
+      # Runner efímero: no hay backlog en Redpanda, así que no hace falta anclar el grupo (anchor-group.mjs).
+      - name: Start infrastructure
+        run: docker compose up -d --wait --wait-timeout 240
+
+      - name: Build app images
+        run: docker compose --profile app build
+
+      # Falla si migrate falla (set -eu) o si un servicio con healthcheck no llega a healthy.
+      - name: Start app profile
+        run: docker compose --profile app up -d --wait --wait-timeout 240
+
+      - name: Check gateway and fleet-api health
+        run: |
+          for service in ingest-gateway fleet-api; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "fleet-telemetry-$service-1")"
+            echo "$service: $status"
+            [ "$status" = "healthy" ] || exit 1
+          done
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1.2.2
+        with:
+          k6-version: 2.3.0
+
+      - name: Load tenant and tokens
+        run: node infra/k6/scripts/setup.mjs
+
+      # Humo de 30 s + verificación de conteos tras lag cero (sale con código distinto de cero si algo no cuadra).
+      - name: k6 smoke and verification
+        run: node infra/k6/scripts/run.mjs --run-id ci-smoke
+
+      # Los tokens de carga (tokens.json) no se suben: solo los resúmenes de la corrida.
+      - name: Collect compose logs
+        if: failure()
+        run: docker compose --profile app logs --no-color --timestamps > compose-logs.txt 2>&1
+
+      - name: Upload k6 results and compose logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: infra-diagnostics
+          path: |
+            compose-logs.txt
+            infra/k6/.run/*.run.json
+            infra/k6/.run/*.k6.json
+            infra/k6/.run/*.verify.json
+            infra/k6/.run/*.chaos.json
           retention-days: 7
           if-no-files-found: warn
