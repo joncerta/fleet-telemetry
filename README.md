@@ -80,7 +80,7 @@ Cada decisión tiene su ADR en [`docs/adr/`](docs/adr/).
 | ADR | Decisión |
 |---|---|
 | [001](docs/adr/001-stack.md) | TypeScript de punta a punta sobre Node 24, frente a Go y .NET, con un único contrato zod para HTTP, Kafka, SSE, móvil y herramientas del LLM. kafkajs, con salida documentada a `@confluentinc/kafka-javascript` |
-| 002 | Persistencia en TimescaleDB + PostGIS frente a Cassandra, y por qué no Druid. *Pendiente: se redacta con la medición de `pnpm db:evidence`* |
+| [002](docs/adr/002-persistencia-timescaledb-postgis.md) | Persistencia en TimescaleDB + PostGIS frente a Cassandra, y por qué no Druid. Medido con 12 M filas ([evidencia](docs/evidence/persistence.md)): se escanea 1 de 15 chunks, la compresión es de 5x, el continuous aggregate es 62x más rápido que la consulta cruda y la ingesta llega a ~40 000 filas/s en un nodo |
 | [003](docs/adr/003-monorepo-y-migraciones.md) | Monorepo con Turborepo y migraciones **reversibles**: par up/down obligatorio, checksum de los dos archivos, prueba de ida y vuelta contra un baseline del esquema y `db:rollback` solo contra una base marcada como local |
 | [004](docs/adr/004-base-de-servicios-y-esquema-de-telemetria.md) | Hypertable con chunks de 1 día, compresión a los 7 días y retención de 90 (Ley 1581); índice único `(event_id, recorded_at)`; token de dispositivo opaco guardado como hash; readiness frente a liveness |
 | [005](docs/adr/005-persistencia-de-telemetria-en-el-processor.md) | Commit de offsets por tramo, solo después de persistir. **A la DLQ solo va lo que falla por su contenido**; un fallo de infraestructura detiene la partición en vez de vaciarla en la DLQ |
@@ -146,10 +146,9 @@ Los tests de contratos exigen que los fixtures de versiones anteriores sigan par
 
 Latencia del ingest: p95 de 23 ms y p99 de 32 ms. Sin pérdidas ni duplicados en la base, también con el processor matado a mitad de un lote.
 
-*Pendientes antes de la entrega:*
-- `/e2e-check` completo con el agente real;
-- la corrida final de Playwright;
-- el ADR-002.
+Playwright de la web, contra el stack real en CI: 11 de 11 en verde. Cubren login, mapa en vivo, alertas sin recargar, aislamiento entre tenants y entre pestañas, vinculación, reconexión, y chat con el breaker abierto.
+
+*Pendiente antes de la entrega:* el `/e2e-check` completo con el agente real.
 
 ## 6. Auditoría de la IA
 

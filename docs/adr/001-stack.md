@@ -2,7 +2,7 @@
 
 - **Estado:** aceptado
 - **Fecha:** 2026-10-04, aprobado con el plan (`docs/PLAN.md`, "Decisiones aprobadas" 1 y 2)
-- **Relacionados:** ADR-002 (persistencia), pendiente para la fase 1d
+- **Relacionados:** [ADR-002](002-persistencia-timescaledb-postgis.md) (persistencia)
 
 ## Contexto
 
