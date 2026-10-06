@@ -1,21 +1,25 @@
 import { randomUUID } from "node:crypto";
-import type { Alert, DevicePairResponse, FleetSummary, PairingCode, Session, StoppedVehiclesResponse, ZoneFeatureCollection } from "@fleet/contracts";
+import type { Alert, DevicePairResponse, FleetSummary, PairingCode, Session, StoppedVehiclesResponse, VehicleState, ZoneFeatureCollection } from "@fleet/contracts";
 import { createLogger, createSessionCodec } from "@fleet/platform";
 import { vi } from "vitest";
 import type { CreatePairingCode } from "../application/create-pairing-code.js";
+import { createFleetEventHub } from "../application/fleet-event-hub.js";
 import type { GetFleetSummary } from "../application/get-fleet-summary.js";
 import type { GetSession } from "../application/get-session.js";
 import type { GetZonesGeoJson } from "../application/get-zones-geojson.js";
 import type { ListAlerts } from "../application/list-alerts.js";
 import type { ListStoppedVehicles } from "../application/list-stopped-vehicles.js";
 import type { Login } from "../application/login.js";
+import { createOpenFleetStream, type OpenFleetStream } from "../application/open-fleet-stream.js";
 import type { PairDevice } from "../application/pair-device.js";
+import type { FleetSnapshotReader } from "../application/ports.js";
 import type { AuthIdentity } from "../domain/identity.js";
 import { createFixedWindowFailureCounter } from "../infrastructure/fixed-window-failure-counter.js";
 import { registerAuthRoutes } from "../interfaces/http/auth-routes.js";
 import { buildApp, type AppDependencies, type FleetApiApp } from "../interfaces/http/build-app.js";
 import { registerDeviceRoutes } from "../interfaces/http/device-routes.js";
 import { registerFleetRoutes } from "../interfaces/http/fleet-routes.js";
+import { registerStreamRoute } from "../interfaces/http/stream-route.js";
 import { createSessionCookies, SESSION_COOKIE_NAME } from "../interfaces/http/session-auth.js";
 
 /** Soporte de los tests de la capa HTTP: la app real de `buildApp` con las rutas reales y casos de uso falsos. No forma parte del build. */
@@ -34,6 +38,22 @@ export const SESSION: Session = {
 export const SUMMARY: FleetSummary = { serverTime: "2026-10-06T12:00:00.000Z", vehicles: { total: 3, moving: 1, stopped: 1, noSignal: 1 }, activeAlerts: 2 };
 export const STOPPED: StoppedVehiclesResponse = { serverTime: "2026-10-06T12:00:00.000Z", items: [] };
 export const ZONES: ZoneFeatureCollection = { type: "FeatureCollection", features: [] };
+export const STREAM_VEHICLE: VehicleState = {
+  vehicleId: randomUUID(),
+  plate: "ABC123",
+  lon: -75.5636,
+  lat: 6.2518,
+  recordedAt: "2026-10-06T11:59:00.000Z",
+  receivedAt: "2026-10-06T11:59:01.000Z",
+  speedMps: 0,
+  headingDeg: null,
+  movement: "stopped",
+  stoppedSince: "2026-10-06T11:30:00.000Z",
+  zoneIds: [],
+  mocked: false,
+  lowAccuracy: false,
+  seq: "7",
+};
 export const PAIRING_CODE = (vehicleId: string): PairingCode => ({ code: "K7M2QX9P", vehicleId, expiresAt: "2026-10-06T12:10:00.000Z" });
 export const PAIRED = (vehicleId: string): DevicePairResponse => ({
   deviceToken: "fdt_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -51,6 +71,7 @@ export interface TestUseCases {
   getZonesGeoJson: GetZonesGeoJson;
   createPairingCode: CreatePairingCode;
   pairDevice: PairDevice;
+  openFleetStream: OpenFleetStream["open"];
 }
 
 export interface TestAppOptions {
@@ -59,6 +80,12 @@ export interface TestAppOptions {
   loginLimit?: { max: number; timeWindowMs: number };
   pairLimit?: { max: number; timeWindowMs: number };
   secureCookie?: boolean;
+  /** Cada cuántos ms late el stream SSE (por defecto 15 s). */
+  heartbeatMs?: number;
+  /** Qué lee el snapshot del stream (por defecto un vehículo). */
+  snapshots?: FleetSnapshotReader;
+  /** Límites del caso de uso del stream. */
+  streamLimits?: { maxStreamsPerUser?: number; maxPendingBytes?: number; maxBufferedEvents?: number };
   /** Reloj de la cookie (ms). */
   now?: () => number;
 }
@@ -73,6 +100,18 @@ export async function makeTestApp(options: TestAppOptions = {}) {
   const now = options.now ?? Date.now;
   const cookies = createSessionCookies({ codec, ttlSeconds: 3_600, secure: options.secureCookie ?? false, now });
 
+  // El stream usa el caso de uso REAL con un hub en memoria (expuesto como `hub`) y un snapshot falso: los tests de la ruta prueban el HTTP real.
+  const hub = createFleetEventHub({ logger });
+  const snapshotRead = vi.fn<FleetSnapshotReader["read"]>(() => Promise.resolve({ vehicles: [STREAM_VEHICLE], alerts: [] }));
+  const snapshots: FleetSnapshotReader = options.snapshots ?? { read: snapshotRead };
+  const fleetStream = createOpenFleetStream({
+    subscriptions: hub,
+    snapshots,
+    clock: { now: () => new Date("2026-10-06T12:00:00.000Z") },
+    logger,
+    limits: { maxStreamsPerUser: 5, maxPendingBytes: 1_048_576, maxBufferedEvents: 1_000, ...options.streamLimits },
+  });
+
   const useCases = {
     login: vi.fn<Login>(() => Promise.resolve({ identity: NORTE, session: SESSION })),
     getSession: vi.fn<GetSession>(() => Promise.resolve(SESSION)),
@@ -82,6 +121,7 @@ export async function makeTestApp(options: TestAppOptions = {}) {
     getZonesGeoJson: vi.fn<GetZonesGeoJson>(() => Promise.resolve(ZONES)),
     createPairingCode: vi.fn<CreatePairingCode>(({ vehicleId }) => Promise.resolve(PAIRING_CODE(vehicleId))),
     pairDevice: vi.fn<PairDevice>(() => Promise.resolve({ response: PAIRED(randomUUID()), tenantId: NORTE.tenantId, deviceId: randomUUID() })),
+    openFleetStream: fleetStream.open,
     ...options.useCases,
   } satisfies TestUseCases;
 
@@ -109,6 +149,7 @@ export async function makeTestApp(options: TestAppOptions = {}) {
         listAlerts: useCases.listAlerts,
         getZonesGeoJson: useCases.getZonesGeoJson,
       });
+      registerStreamRoute(instance, { cookies, openFleetStream: useCases.openFleetStream, heartbeatMs: options.heartbeatMs ?? 15_000, corsOrigins: [ALLOWED_ORIGIN] });
       registerDeviceRoutes(instance, { cookies, createPairingCode: useCases.createPairingCode, pairDevice: useCases.pairDevice, pairFailureLimiter });
     },
     ...options.app,
@@ -120,6 +161,9 @@ export async function makeTestApp(options: TestAppOptions = {}) {
 
   return {
     app,
+    hub,
+    fleetStream,
+    snapshotRead,
     useCases,
     codec,
     sessionCookieOf,

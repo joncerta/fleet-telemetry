@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { healthResponseSchema } from "./health.js";
+import { healthResponseSchema, livenessResponseSchema } from "./health.js";
 import { TOPICS } from "./topics.js";
 
 describe("healthResponseSchema", () => {
@@ -12,6 +12,14 @@ describe("healthResponseSchema", () => {
     expect(healthResponseSchema.safeParse({ status: "fail", checks: {} }).success).toBe(false);
     expect(healthResponseSchema.safeParse({ status: "ok", checks: { kafka: "maybe" } }).success).toBe(false);
     expect(healthResponseSchema.safeParse({ status: "ok" }).success).toBe(false);
+  });
+});
+
+describe("livenessResponseSchema", () => {
+  it("acepta solo { status: ok }", () => {
+    expect(livenessResponseSchema.safeParse({ status: "ok" }).success).toBe(true);
+    expect(livenessResponseSchema.safeParse({ status: "degraded" }).success).toBe(false);
+    expect(livenessResponseSchema.safeParse({}).success).toBe(false);
   });
 });
 

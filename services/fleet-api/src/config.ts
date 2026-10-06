@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { databaseConfig, kafkaConfig, loadConfig, logConfig, sessionSecretConfig, shutdownConfig, type Env } from "@fleet/platform";
 import { z } from "zod";
 
@@ -38,8 +39,18 @@ const fleetApiConfig = z.object({
   FLEET_API_CORS_ORIGINS: corsOrigins.default(["http://localhost:3000"]),
   // `Secure` de la cookie de sesión: false solo en local (http); en cualquier despliegue con TLS debe ser true.
   FLEET_API_COOKIE_SECURE: booleanFlag.default(false),
-  // Latido del stream SSE (el SSE llega en el paso siguiente): acotado por el idle timeout del ALB.
+  // Latido del stream SSE: acotado por el idle timeout del ALB.
   SSE_HEARTBEAT_MS: z.coerce.number().int().min(1_000).max(MAX_SSE_HEARTBEAT_MS).default(15_000),
+  // Identidad de ESTA réplica en el consumer group del SSE (`fleet-api-sse-<id>`): cada réplica necesita un grupo propio para recibir todos los
+  // eventos. Por defecto un uuid nuevo por proceso (el grupo no sobrevive al proceso). Solo `[A-Za-z0-9._-]`, hasta 64 caracteres.
+  FLEET_API_INSTANCE_ID: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]{1,64}$/, { error: "debe ser de 1 a 64 caracteres de [A-Za-z0-9._-]" })
+    .default(() => randomUUID()),
+  // Streams SSE simultáneos por usuario en cada réplica; el siguiente recibe 429.
+  SSE_MAX_STREAMS_PER_USER: z.coerce.number().int().min(1).max(100).default(5),
+  // Bytes sin leer en el socket de un stream a partir de los cuales el cliente se da por lento y se le corta (reconecta y recibe un snapshot nuevo).
+  SSE_MAX_PENDING_BYTES: z.coerce.number().int().min(65_536).max(67_108_864).default(4_194_304),
   // Saltos de proxy de confianza delante del servicio (el ALB = 1). Con 0 se ignora X-Forwarded-For. Mal configurado, los límites por IP
   // se vuelven globales (se ve la IP del balanceador) o se dejan falsear.
   FLEET_API_TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
