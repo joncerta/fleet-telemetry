@@ -1,5 +1,7 @@
+import { randomBytes } from "node:crypto";
 import { assertStackAvailable } from "@fleet/platform/testing";
 import { test as base, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { deleteE2eVehicles, uniqueE2ePlate } from "./cleanup";
 import { loadE2eEnv, type E2eEnv } from "./env";
 import { startStack, type E2eStack } from "./stack";
 import { createFleetDriver, type FleetDriver } from "./telemetry";
@@ -23,7 +25,12 @@ interface WorkerFixtures {
   fleet: FleetDriver;
 }
 
-export const test = base.extend<{ page: Page }, WorkerFixtures>({
+/** Vehículos que un test da de alta: `plate()` entrega una placa única por llamada y, al terminar el test (pase o falle), se borran con lo que cuelga de ellos. */
+export interface E2eVehicles {
+  plate(): string;
+}
+
+export const test = base.extend<{ page: Page; e2eVehicles: E2eVehicles }, WorkerFixtures>({
   env: [
     // Playwright exige desestructurar el primer argumento; se toma el fixture integrado `playwright` (sin usarlo) en vez de `{}`.
     async ({ playwright: _playwright }, use) => {
@@ -55,6 +62,17 @@ export const test = base.extend<{ page: Page }, WorkerFixtures>({
     },
     { scope: "worker" },
   ],
+  e2eVehicles: async ({ env }, use) => {
+    const plates: string[] = [];
+    await use({
+      plate() {
+        const plate = uniqueE2ePlate(randomBytes(4).toString("hex"));
+        plates.push(plate);
+        return plate;
+      },
+    });
+    await deleteE2eVehicles(env, plates);
+  },
   page: async ({ page }, use) => {
     await routeMapTiles(page);
     await use(page);
