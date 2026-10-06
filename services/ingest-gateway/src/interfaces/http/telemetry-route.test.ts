@@ -1,10 +1,13 @@
 import { apiErrorSchema, batchAckSchema, MAX_BATCH_POINTS, type BatchAck } from "@fleet/contracts";
 import { createLogger } from "@fleet/platform";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAuthenticateDevice } from "../../application/authenticate-device.js";
 import { DeviceDirectoryUnavailableError, PublicationFailedError } from "../../application/errors.js";
+import type { DeviceRepository } from "../../application/ports.js";
 import type { ReceiveTelemetryBatchInput } from "../../application/receive-telemetry-batch.js";
 import type { DeviceContext } from "../../domain/device.js";
 import { createFixedWindowFailureCounter } from "../../infrastructure/fixed-window-failure-counter.js";
+import { createLimitedDeviceRepository } from "../../infrastructure/limited-device-repository.js";
 import { buildApp, type GatewayApp } from "./build-app.js";
 import { bearerToken, registerTelemetryRoute, TELEMETRY_BATCHES_PATH, type TelemetryRouteDependencies } from "./telemetry-route.js";
 
@@ -585,6 +588,36 @@ describe("POST /v1/telemetry/batches: errores del caso de uso", () => {
     databaseUp = true;
 
     expect((await post(envelope(), bearer(), from)).statusCode).toBe(202);
+  });
+
+  it("con el tope de consultas de autenticación en vuelo agotado responde 503 con Retry-After (no 401), sin llamar al repositorio interno y sin contar contra la IP", async () => {
+    const lookups: string[] = [];
+    let release: () => void = () => undefined;
+    const inner: DeviceRepository = {
+      findActiveByTokenHash(hash) {
+        lookups.push(hash);
+        return new Promise((resolve) => void (release = () => resolve(DEVICE)));
+      },
+    };
+    const authenticate = createAuthenticateDevice({
+      devices: createLimitedDeviceRepository(inner, { maxInFlight: 1 }),
+      hashToken: (token) => token,
+    });
+    const { post } = await makeApp({ authenticate, authFailureLimit: { max: 1, timeWindowMs: 60_000 } });
+    const from = { remoteAddress: "198.51.100.9" };
+
+    const occupying = post(envelope(), bearer(TOKEN), from); // ocupa el único cupo
+    await vi.waitFor(() => expect(lookups).toHaveLength(1));
+    for (let i = 0; i < 3; i += 1) {
+      const response = await post(envelope(), bearer(UNKNOWN_TOKEN), from);
+      expect(response.statusCode).toBe(503);
+      expect(errorCode(response.json())).toBe("service_unavailable");
+      expectRetryAfter(response.headers["retry-after"]);
+    }
+    expect(lookups).toEqual([TOKEN]);
+
+    release();
+    expect((await occupying).statusCode).toBe(202);
   });
 
   it("un error inesperado al autenticar (que no es la base) responde 500 internal_error", async () => {

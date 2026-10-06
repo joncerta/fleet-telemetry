@@ -37,6 +37,10 @@ const gatewayConfig = z.object({
   INGEST_GATEWAY_TOKEN_CACHE_TTL_MS: z.coerce.number().int().min(0).max(MAX_TOKEN_CACHE_TTL_MS).default(30_000),
   INGEST_GATEWAY_TOKEN_CACHE_NEGATIVE_TTL_MS: z.coerce.number().int().min(0).max(MAX_TOKEN_CACHE_TTL_MS).default(5_000),
   INGEST_GATEWAY_TOKEN_CACHE_MAX_ENTRIES: z.coerce.number().int().min(1).max(1_000_000).default(10_000),
+  // Consultas de autenticación a la base en vuelo como máximo (debajo de la caché: los aciertos no cuentan). Es también el tamaño del
+  // pool de autenticación. Por encima, el lote responde 503 con Retry-After sin tocar el pool: un flood de tokens inventados no
+  // puede saturar la base ni dejar sin autenticar a los dispositivos cuyo token no está en caché.
+  INGEST_GATEWAY_MAX_IN_FLIGHT_AUTH_LOOKUPS: z.coerce.number().int().min(1).max(100).default(8),
   // Cuánto puede adelantarse el `recordedAt` de un punto a la hora del servidor antes de rechazarlo (future_timestamp).
   INGEST_GATEWAY_FUTURE_TOLERANCE_MS: z.coerce.number().int().min(0).max(MAX_FUTURE_TOLERANCE_MS).default(300_000),
   // Antigüedad máxima del `recordedAt` (stale_timestamp). Por defecto 7 días, el umbral de compresión de `telemetry`; como mucho

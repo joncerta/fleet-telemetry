@@ -5,6 +5,7 @@ import { createReceiveTelemetryBatch } from "./application/receive-telemetry-bat
 import { loadGatewayConfig } from "./config.js";
 import { createCachedDeviceRepository } from "./infrastructure/cached-device-repository.js";
 import { createFixedWindowFailureCounter } from "./infrastructure/fixed-window-failure-counter.js";
+import { createLimitedDeviceRepository } from "./infrastructure/limited-device-repository.js";
 import { createKafkaTelemetryPublisher } from "./infrastructure/kafka-telemetry-publisher.js";
 import { createPgDeviceRepository } from "./infrastructure/pg-device-repository.js";
 import { createDatabaseCheck, createKafkaCheck, ProducerConnectionState } from "./infrastructure/readiness.js";
@@ -23,10 +24,14 @@ const kafka = createKafka({ brokers: config.KAFKA_BROKERS, clientId: SERVICE, lo
 // tiempo máximo por envío (INGEST_GATEWAY_PUBLISH_TIMEOUT_MS), que es lo que decide el 503.
 const producer = createProducer(kafka, { retry: { retries: config.INGEST_GATEWAY_KAFKA_RETRIES, initialRetryTime: 100, maxRetryTime: 2_000 } });
 const producerState = new ProducerConnectionState();
-const pool = createPool({ connectionString: config.DATABASE_URL, applicationName: SERVICE, logger });
+// Pool de autenticación: del tamaño del tope de consultas en vuelo, así nunca hay cola en el pool. El ping de /health va por un pool
+// propio de una conexión: con el de autenticación saturado, /health no debe dar un falso 503 ni quitarle conexiones.
+const pool = createPool({ connectionString: config.DATABASE_URL, applicationName: SERVICE, logger, max: config.INGEST_GATEWAY_MAX_IN_FLIGHT_AUTH_LOOKUPS });
+const healthPool = createPool({ connectionString: config.DATABASE_URL, applicationName: `${SERVICE}-health`, logger, max: 1 });
 
 const authenticateDevice = createAuthenticateDevice({
-  devices: createCachedDeviceRepository(createPgDeviceRepository(pool), {
+  // Orden: la caché va encima del tope, para que los aciertos de caché no cuenten contra él.
+  devices: createCachedDeviceRepository(createLimitedDeviceRepository(createPgDeviceRepository(pool), { maxInFlight: config.INGEST_GATEWAY_MAX_IN_FLIGHT_AUTH_LOOKUPS }), {
     ttlMs: config.INGEST_GATEWAY_TOKEN_CACHE_TTL_MS,
     negativeTtlMs: config.INGEST_GATEWAY_TOKEN_CACHE_NEGATIVE_TTL_MS,
     maxEntries: config.INGEST_GATEWAY_TOKEN_CACHE_MAX_ENTRIES,
@@ -50,7 +55,7 @@ const app = await buildApp({
   trustProxyHops: config.INGEST_GATEWAY_TRUSTED_PROXY_HOPS,
   bodyLimitBytes: config.INGEST_GATEWAY_BODY_LIMIT_BYTES,
   rateLimit: { max: config.INGEST_GATEWAY_RATE_LIMIT_MAX, timeWindowMs: config.INGEST_GATEWAY_RATE_LIMIT_WINDOW_MS },
-  checkHealth: createCheckHealth([createDatabaseCheck(pool, logger), createKafkaCheck(producerState)]),
+  checkHealth: createCheckHealth([createDatabaseCheck(healthPool, logger), createKafkaCheck(producerState)]),
   registerRoutes: (instance) =>
     registerTelemetryRoute(instance, {
       authenticate: authenticateDevice,
@@ -75,6 +80,7 @@ const lifecycle = installGracefulShutdown({
     // 3) Con nada en vuelo, ya se pueden cerrar el productor y el pool.
     { name: "desconectar el productor de Kafka", run: () => producer.disconnect() },
     { name: "cerrar el pool de Postgres", run: () => pool.end() },
+    { name: "cerrar el pool del ping de salud", run: () => healthPool.end() },
   ],
 });
 
