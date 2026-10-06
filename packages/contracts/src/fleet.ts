@@ -475,11 +475,13 @@ export const PLATE_TAKEN_ERROR_CODE = "plate_taken";
 export const VEHICLE_LABEL_MAX_LENGTH = 64;
 
 /**
- * Forma de una placa ya normalizada (mayúsculas): letras y dígitos, con UN guion opcional entre dos grupos (`ABC123`, `ABC-123`,
- * `ABC12D`). Cubre las placas colombianas (carro, moto, remolque) y las de otros países con la misma forma. NO unifica `ABC-123` con
- * `ABC123`: son placas distintas para el catálogo.
+ * Forma de una placa CANÓNICA: letras y dígitos en mayúsculas, sin espacios ni guiones (`ABC123`, `ABC12D`). Al normalizar se quitan los
+ * espacios y los guiones, así que `ABC-123`, `ABC 123` y `abc123` son LA MISMA placa y se guardan como `ABC123`.
  */
-const PLATE_PATTERN = /^[A-Z0-9]+(?:-[A-Z0-9]+)?$/;
+const PLATE_PATTERN = /^[A-Z0-9]+$/;
+
+/** Etiqueta sin caracteres de control (Cc) ni de dirección bidi (U+202A-202E, U+2066-2069): un NUL rompe el INSERT y los bidi falsean lo que se ve. */
+const LABEL_PATTERN = /^[^\p{Cc}\u202A-\u202E\u2066-\u2069]*$/u;
 
 /** Vehículo del catálogo del tenant (con o sin datos de telemetría). Desde v1. */
 export const vehicleCatalogItemSchema = z.object({
@@ -509,23 +511,26 @@ export const vehicleListResponseSchema = z.object({
 export type VehicleListResponse = z.infer<typeof vehicleListResponseSchema>;
 
 /**
- * Cuerpo de `POST /v1/vehicles` (alta). Desde v1. La placa se NORMALIZA al parsear (se recorta y pasa a mayúsculas) y debe cumplir
- * `^[A-Z0-9]+(?:-[A-Z0-9]+)?$`, de 1 a 32 caracteres. La etiqueta es opcional: se recorta, admite hasta 64 caracteres y una
- * vacía (o ausente, o null) se guarda como null. Responde `201` con `vehicleCatalogItemSchema`, o `409 plate_taken`.
+ * Cuerpo de `POST /v1/vehicles` (alta). Desde v1. La placa se NORMALIZA al parsear: se recorta, pasa a mayúsculas y se le quitan los
+ * espacios y los guiones; el resultado debe cumplir `^[A-Z0-9]+$`, de 1 a 32 caracteres (`abc-123` y `ABC 123` dan `ABC123`). La
+ * etiqueta es opcional: se recorta, admite hasta 64 caracteres sin caracteres de control ni bidi, y una vacía (o ausente, o null) se
+ * guarda como null. Responde `201` con `vehicleCatalogItemSchema`, o `409 plate_taken`.
  */
 export const vehicleCreateRequestSchema = z.object({
   plate: z
     .string()
     .trim()
     .toUpperCase()
+    .overwrite((value) => value.replace(/[\s-]+/g, ""))
     .min(1)
     .max(32)
-    .regex(PLATE_PATTERN, { error: "la placa son letras y dígitos, con un guion opcional entre dos grupos" })
-    .describe("DATO PERSONAL (Ley 1581). Placa, normalizada a mayúsculas. Única dentro del tenant. Desde v1."),
+    .regex(PLATE_PATTERN, { error: "la placa son solo letras y dígitos (se ignoran espacios y guiones)" })
+    .describe("DATO PERSONAL (Ley 1581). Placa canónica: mayúsculas, sin espacios ni guiones. Única dentro del tenant. Desde v1."),
   label: z
     .string()
     .trim()
     .max(VEHICLE_LABEL_MAX_LENGTH)
+    .regex(LABEL_PATTERN, { error: "la etiqueta no admite caracteres de control ni de dirección de texto" })
     .nullish()
     .transform((value) => (value === undefined || value === null || value === "" ? null : value))
     .describe("DATO PERSONAL (Ley 1581). Nombre visible o alias, opcional; vacío equivale a null. Desde v1."),

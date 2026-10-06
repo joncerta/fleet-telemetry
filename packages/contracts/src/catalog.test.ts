@@ -14,7 +14,9 @@ const vehicle = { vehicleId: "3c9e7a10-5b2d-4e6f-9a81-7d4c0b2e5f13", plate: "ABC
 describe("alta de vehículo (vehicleCreateRequestSchema)", () => {
   it.each([
     ["abc123", "ABC123"],
-    ["  abc-123  ", "ABC-123"],
+    ["  abc-123  ", "ABC123"],
+    ["ABC 123", "ABC123"],
+    ["a-b c--1 2-3", "ABC123"],
     ["Abc12d", "ABC12D"],
     ["X", "X"],
     ["ABC123\n", "ABC123"],
@@ -23,7 +25,7 @@ describe("alta de vehículo (vehicleCreateRequestSchema)", () => {
     expect(vehicleCreateRequestSchema.parse({ plate: input }).plate).toBe(expected);
   });
 
-  it.each(["", "   ", "A".repeat(33), "ABC 123", "ABC--123", "-ABC", "ABC-", "AB-C1-23", "ÁBC123", "ABC_123", "AB.C"])("rechaza la placa %j", (plate) => {
+  it.each(["", "   ", "A".repeat(33), "-", " - ", "--", "ÁBC123", "ABC_123", "AB.C"])("rechaza la placa %j", (plate) => {
     expect(vehicleCreateRequestSchema.safeParse({ plate }).success).toBe(false);
   });
 
@@ -41,6 +43,16 @@ describe("alta de vehículo (vehicleCreateRequestSchema)", () => {
     ["a".repeat(64), "a".repeat(64)],
   ])("la etiqueta %j se guarda como %j", (label, expected) => {
     expect(vehicleCreateRequestSchema.parse({ plate: "ABC123", label }).label).toBe(expected);
+  });
+
+  it("ABC-123, ABC 123 y abc123 son la misma placa canónica", () => {
+    const plates = ["ABC-123", "abc 123", "abc123"].map((plate) => vehicleCreateRequestSchema.parse({ plate }).plate);
+
+    expect(new Set(plates)).toEqual(new Set(["ABC123"]));
+  });
+
+  it.each(["a\u0000b", "\u202Eabc", "a\u2066b", "a\u0007b", "a\nb"])("rechaza la etiqueta %j (caracteres de control o bidi)", (label) => {
+    expect(vehicleCreateRequestSchema.safeParse({ plate: "ABC123", label }).success).toBe(false);
   });
 
   it("rechaza una etiqueta de más de 64 caracteres", () => {
