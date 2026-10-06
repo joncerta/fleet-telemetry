@@ -41,8 +41,11 @@ import {
   vehicleStateEventTolerantSchema,
   vehicleStateSchema,
   vehicleStateTolerantSchema,
+  zoneCreateRequestSchema,
   zoneFeatureCollectionSchema,
   zoneFeatureCollectionTolerantSchema,
+  zoneFeatureSchema,
+  zoneFeatureTolerantSchema,
 } from "../fleet.js";
 import { healthResponseSchema, livenessResponseSchema } from "../health.js";
 import {
@@ -101,6 +104,9 @@ export const contractRegistry: readonly ContractEntry[] = [
   { name: "alert-event-tolerant", schema: alertEventTolerantSchema, versions: [1] },
   { name: "zone-feature-collection", schema: zoneFeatureCollectionSchema, versions: [1] },
   { name: "zone-feature-collection-tolerant", schema: zoneFeatureCollectionTolerantSchema, versions: [1] },
+  { name: "zone-feature", schema: zoneFeatureSchema, versions: [1] },
+  { name: "zone-feature-tolerant", schema: zoneFeatureTolerantSchema, versions: [1] },
+  { name: "zone-create-request", schema: zoneCreateRequestSchema, versions: [1] },
   { name: "fleet-summary", schema: fleetSummarySchema, versions: [1] },
   { name: "stopped-vehicles-query", schema: stoppedVehiclesQuerySchema, versions: [1] },
   { name: "stopped-vehicles-response", schema: stoppedVehiclesResponseSchema, versions: [1] },
