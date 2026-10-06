@@ -688,7 +688,7 @@ importers:
         version: 8.23.1
       eslint:
         specifier: 'catalog:'
-        version: 10.12.0
+        version: 10.12.0(supports-color@8.1.1)
       pg:
         specifier: 'catalog:'
         version: 8.23.1
@@ -697,7 +697,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+        version: 5.0.3(@types/node@24.19.1)(vite@8.3.2(@types/node@24.19.1)(esbuild@0.28.2)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
 
 packages:
 
