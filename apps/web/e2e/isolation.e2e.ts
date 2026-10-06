@@ -6,6 +6,7 @@ import {
   expect,
   login,
   NORTE_ISOLATION,
+  expandAll,
   openIsolatedPage,
   openPanel,
   sendUntilShown,
@@ -55,6 +56,8 @@ test("aislamiento: Norte y Sur logueados a la vez; lo de Norte llega a Norte y n
     await expect(mockedAlert).toHaveCount(1);
 
     // Recién ahora, con la prueba de que el evento de Norte ya se distribuyó, Sur no tiene nada de Norte.
+    // Con TODO abierto (los cinco paneles y el historial): cerrados o desmontados, un "0" no probaría nada.
+    await expandAll(sur.page);
     await expect(vehicleItem(sur.page, SUR_LIVE)).toBeVisible();
     await expect(norteVisibleIn(sur.page).vehicles).toHaveCount(0);
     await expect(norteVisibleIn(sur.page).alerts).toHaveCount(0);
@@ -63,6 +66,8 @@ test("aislamiento: Norte y Sur logueados a la vez; lo de Norte llega a Norte y n
     // Snapshot y REST: tras recargar, Sur vuelve a pedir todo y sigue sin ver nada de Norte.
     await sur.page.reload();
     await expect(connectionStatus(sur.page)).toContainText("En vivo");
+    // El historial no se recuerda entre recargas: se vuelve a abrir todo antes de mirar.
+    await expandAll(sur.page);
     await expect(vehicleItem(sur.page, SUR_LIVE)).toBeVisible();
     await expect(norteVisibleIn(sur.page).vehicles).toHaveCount(0);
     await expect(norteVisibleIn(sur.page).alerts).toHaveCount(0);

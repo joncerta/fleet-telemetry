@@ -7,6 +7,7 @@ import { createFleetSync } from "../features/fleet/fleet-sync";
 import { browserEventSource, createFleetStream, type SessionProbe } from "../features/stream/fleet-stream-client";
 import { createAgentApi, type AgentApi } from "../lib/api/agent-api";
 import { createFleetApi, FLEET_API_PATHS, type FleetApi } from "../lib/api/fleet-api";
+import { browserStorage, clearPanelPreferences } from "../components/panel-state";
 import { createHttpClient, UnauthorizedError } from "../lib/api/http-client";
 import { logWarn } from "../lib/log";
 import { createSharedResource, type SharedResource } from "../lib/shared-resource";
@@ -154,6 +155,8 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
         logWarn("No se pudo cerrar la sesión en el servidor");
       }
       fleetStore.getState().reset();
+      // Cierre explícito (puede ser un equipo compartido): no quedan preferencias de la interfaz del usuario.
+      clearPanelPreferences(browserStorage());
       sessionStore.getState().signedOut();
       announceSessionChange();
     },

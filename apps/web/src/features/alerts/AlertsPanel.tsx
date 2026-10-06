@@ -1,9 +1,10 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFleet, useServices } from "../../app-services/services-context";
-import { Disclosure, Panel, PanelNote } from "../../components/panel";
+import { Disclosure, focusPanelToggle, Panel, PanelNote } from "../../components/panel";
 import { formatTime } from "../../lib/format";
+import type { FleetStore } from "../fleet/fleet-store";
 import { createAlertAnnouncer } from "./alert-announcer";
 import { ALERT_TYPE_LABELS, buildAlertFeed, countActiveAlerts, partitionAlertFeed, type AlertGroup, type AlertSeverity, type Announcement } from "./alert-feed";
 
@@ -18,11 +19,23 @@ const SEVERITY_BADGE: Record<AlertSeverity, string> = {
 };
 const SEVERITY_ICON: Record<AlertSeverity, string> = { critical: "▲", warning: "◆", info: "●" };
 
+const PANEL_ID = "alerts";
+
 const AlertRow = memo(function AlertRow({ group, onSelect }: { group: AlertGroup; onSelect: (vehicleId: string) => void }) {
   const { latest } = group;
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  // Si la fila que tiene el foco desaparece (la alerta se resolvió y pasó al historial, que está cerrado), el foco caería a `body`: se
+  // devuelve al encabezado del panel. Se hace al desmontar, antes de que el navegador quite el nodo.
+  useLayoutEffect(() => {
+    const button = buttonRef.current;
+    return () => {
+      if (button !== null && document.activeElement === button) focusPanelToggle(PANEL_ID);
+    };
+  }, []);
   return (
     <li>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => onSelect(group.vehicleId)}
         className="w-full rounded-lg border border-line bg-raised px-3 py-2 text-left hover:bg-canvas"
@@ -95,18 +108,27 @@ function useAlertAnnouncements(): Announcement {
   return announcement;
 }
 
-export function AlertsPanel() {
+/** Lista de alertas: solo se monta con el panel abierto, así `buildAlertFeed` no corre por cada alerta mientras el panel está cerrado. */
+function AlertsBody() {
   const { fleetStore } = useServices();
   const alerts = useFleet((state) => state.alerts);
   const ready = useFleet((state) => state.ready);
   const groups = useMemo(() => buildAlertFeed(Object.values(alerts)), [alerts]);
-  const activeCount = useMemo(() => countActiveAlerts(Object.values(alerts)), [alerts]);
-  const announcement = useAlertAnnouncements();
   const select = useCallback((vehicleId: string) => fleetStore.getState().selectVehicle(vehicleId), [fleetStore]);
+  return ready ? <AlertList groups={groups} onSelect={select} /> : <PanelNote>Esperando datos en vivo…</PanelNote>;
+}
+
+/** Contador del encabezado: un número, calculado sin agrupar. */
+const selectActiveCount = (state: FleetStore) => countActiveAlerts(Object.values(state.alerts));
+
+export function AlertsPanel() {
+  const ready = useFleet((state) => state.ready);
+  const activeCount = useFleet(selectActiveCount);
+  const announcement = useAlertAnnouncements();
 
   return (
     <Panel
-      id="alerts"
+      id={PANEL_ID}
       title="Alertas en vivo"
       defaultOpen
       count={ready ? `${activeCount} activas` : undefined}
@@ -121,7 +143,7 @@ export function AlertsPanel() {
         </>
       }
     >
-      {ready ? <AlertList groups={groups} onSelect={select} /> : <PanelNote>Esperando datos en vivo…</PanelNote>}
+      <AlertsBody />
     </Panel>
   );
 }

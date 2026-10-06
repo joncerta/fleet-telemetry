@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { panelStorageKey, parsePanelPreferences, readPanelPreferences, resolveOpen, writePanelPreference, type PreferenceStorage } from "./panel-state";
+import { clearPanelPreferences, panelStorageKey, parsePanelPreferences, readPanelPreferences, resolveOpen, writePanelPreference, type PreferenceStorage } from "./panel-state";
 
 const KEY = panelStorageKey("user-1");
 
@@ -57,5 +57,37 @@ describe("preferencias de paneles", () => {
     expect(resolveOpen({ alerts: false }, "alerts", true)).toBe(false);
     expect(resolveOpen({}, "alerts", true)).toBe(true);
     expect(resolveOpen({}, "vehicles", false)).toBe(false);
+  });
+});
+
+describe("clearPanelPreferences", () => {
+  function clearable(initial: Record<string, string>) {
+    const data = { ...initial };
+    return {
+      data,
+      get length() {
+        return Object.keys(data).length;
+      },
+      key: (index: number) => Object.keys(data)[index] ?? null,
+      removeItem: (key: string) => void delete data[key],
+    };
+  }
+
+  it("borra las preferencias de todos los usuarios y deja lo demás", () => {
+    const storage = clearable({ [panelStorageKey("a")]: "{}", [panelStorageKey("b")]: "{}", otra: "x" });
+    clearPanelPreferences(storage);
+    expect(storage.data).toEqual({ otra: "x" });
+  });
+
+  it("no lanza con storage nulo o que falla", () => {
+    expect(() => clearPanelPreferences(null)).not.toThrow();
+    const broken = {
+      length: 1,
+      key: () => {
+        throw new Error("SecurityError");
+      },
+      removeItem: () => undefined,
+    };
+    expect(() => clearPanelPreferences(broken)).not.toThrow();
   });
 });

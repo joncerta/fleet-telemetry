@@ -2,7 +2,8 @@
 
 import type { FleetSummary } from "@fleet/contracts";
 import { useFleet } from "../../app-services/services-context";
-import { Panel, PanelNote } from "../../components/panel";
+import { Panel } from "../../components/panel";
+import { panelError } from "../../components/panel-error";
 import { formatInteger, formatTime } from "../../lib/format";
 import type { Loadable } from "../../lib/loadable";
 
@@ -33,15 +34,6 @@ export function KpiGrid({ summary }: { summary: Loadable<FleetSummary> }) {
           </div>
         ))}
       </dl>
-      {/* Por `error` (que `loading()` conserva), no por el estado: con la API caída, cada recarga no desmonta y vuelve a montar el aviso. */}
-      {summary.error !== null && (
-        <div className="mt-2">
-          <PanelNote tone="error">
-            {summary.error}
-            {summary.updatedAt !== null && ` Datos de las ${formatTime(summary.updatedAt)}.`}
-          </PanelNote>
-        </div>
-      )}
     </>
   );
 }
@@ -53,6 +45,7 @@ export function KpiPanel() {
       id="kpi"
       title="Resumen de la flota"
       defaultOpen
+      error={panelError(summary, "Datos")}
       count={summary.data === null ? undefined : `${formatInteger(summary.data.vehicles.total)} vehículos`}
       aside={summary.updatedAt !== null && `Actualizado ${formatTime(summary.updatedAt)}`}
     >
