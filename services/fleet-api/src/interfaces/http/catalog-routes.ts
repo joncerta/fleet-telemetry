@@ -35,7 +35,7 @@ const readErrors = { 400: apiErrorSchema, 401: apiErrorSchema, 429: apiErrorSche
  * - `GET /v1/vehicles`: catálogo del tenant, por placa.
  * - `POST /v1/vehicles`: alta (201; 409 `plate_taken`; 400 si no valida). Protegida como el resto de las escrituras con cookie: sesión
  *   `SameSite=Lax` + CORS con lista de orígenes + solo `application/json` (un formulario de otro sitio no puede enviarlo), más un límite
- *   propio por usuario.
+ *   propio por usuario (por IP si no hay sesión).
  * - `GET /v1/users`: usuarios del tenant, solo lectura.
  */
 export function registerCatalogRoutes(app: FleetApiApp, deps: CatalogRouteDependencies): void {
@@ -50,14 +50,18 @@ export function registerCatalogRoutes(app: FleetApiApp, deps: CatalogRouteDepend
   app.post(
     VEHICLES_PATH,
     {
-      // `onRequest` de la ruta corre ANTES del límite del plugin: una petición sin sesión es 401 sin consumir cupo de usuario (la cubre el
-      // límite global por IP). Con sesión, el cupo es del usuario.
-      onRequest,
+      // `preParsing` y no `onRequest`: el límite de abajo es un hook `onRequest` que el plugin añade DESPUÉS de los `onRequest` de la ruta, y
+      // la ruta trae su propio `config.rateLimit`, así que el límite global no la cubre. Con la sesión en `preParsing` el límite corre antes
+      // (y cuenta también a quien no tiene sesión, por IP) y la sesión se verifica antes de leer el cuerpo.
+      preParsing: deps.cookies.requireSession,
       config: {
         rateLimit: {
           max: deps.createRateLimit.max,
           timeWindow: deps.createRateLimit.timeWindowMs,
-          keyGenerator: (request) => `user:${deps.cookies.identityOf(request)?.userId ?? request.ip}`,
+          keyGenerator: (request) => {
+            const identity = deps.cookies.identityOf(request);
+            return identity === undefined ? `ip:${request.ip}` : `user:${identity.userId}`;
+          },
         },
       },
       schema: {

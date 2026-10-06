@@ -20,14 +20,14 @@ function makeCatalog(result: CreateVehicleResult) {
 
 describe("createCreateVehicle", () => {
   it("crea el vehículo en el tenant de la SESIÓN con un id generado por el servidor y devuelve el vehículo sin dispositivo", async () => {
-    const { create, catalog } = makeCatalog({ status: "created", vehicle: stored("ABC-123", "Camión 7") });
+    const { create, catalog } = makeCatalog({ status: "created", vehicle: stored("ABC123", "Camión 7") });
     const createVehicle = createCreateVehicle({ catalog, newVehicleId: () => vehicleId });
 
     const vehicle = await createVehicle({ identity, vehicle: vehicleCreateRequestSchema.parse({ plate: " abc-123 ", label: " Camión 7 " }) });
 
-    expect(vehicleCatalogItemSchema.parse(vehicle)).toEqual(stored("ABC-123", "Camión 7"));
+    expect(vehicleCatalogItemSchema.parse(vehicle)).toEqual(stored("ABC123", "Camión 7"));
     expect(vehicle.hasActiveDevice).toBe(false);
-    expect(create).toHaveBeenCalledExactlyOnceWith({ tenantId: identity.tenantId, vehicleId, plate: "ABC-123", label: "Camión 7" });
+    expect(create).toHaveBeenCalledExactlyOnceWith({ tenantId: identity.tenantId, vehicleId, plate: "ABC123", label: "Camión 7" });
   });
 
   it("una placa ya existente en el tenant es PlateTakenError, sin la placa en el mensaje", async () => {

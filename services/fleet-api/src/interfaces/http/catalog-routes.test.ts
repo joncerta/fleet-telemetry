@@ -66,7 +66,7 @@ describe("POST /v1/vehicles", () => {
 
     expect(response.statusCode).toBe(201);
     expect(vehicleCatalogItemSchema.parse(response.json())).toEqual(CATALOG_VEHICLE);
-    expect(useCases.createVehicle).toHaveBeenCalledExactlyOnceWith({ identity: NORTE, vehicle: { plate: "ABC-123", label: "Camión 7" } });
+    expect(useCases.createVehicle).toHaveBeenCalledExactlyOnceWith({ identity: NORTE, vehicle: { plate: "ABC123", label: "Camión 7" } });
   });
 
   it("sin etiqueta la guarda como null", async () => {
@@ -103,7 +103,18 @@ describe("POST /v1/vehicles", () => {
     expect(raw()).not.toContain("ZZZ999");
   });
 
-  it.each([{}, { plate: "" }, { plate: "AB CD" }, { plate: "A".repeat(33) }, { plate: 7 }, { plate: "ABC123", label: "a".repeat(65) }, { plate: "ABC123", label: 5 }])(
+  it.each([
+    {},
+    { plate: "" },
+    { plate: " - " },
+    { plate: "AB.CD" },
+    { plate: "A".repeat(33) },
+    { plate: 7 },
+    { plate: "ABC123", label: "a".repeat(65) },
+    { plate: "ABC123", label: 5 },
+    { plate: "ABC123", label: "a\u0000b" },
+    { plate: "ABC123", label: "\u202Eabc" },
+  ])(
     "un cuerpo inválido %j responde 400 sin llegar al caso de uso",
     async (payload) => {
       const { app, useCases, sessionCookieOf } = await makeApp();
@@ -116,17 +127,47 @@ describe("POST /v1/vehicles", () => {
     },
   );
 
-  it("solo acepta application/json: text/plain responde 415", async () => {
+  it.each(["ABC-123", "abc 123", " a-b c 1-2-3 "])("la placa %j se normaliza a la canónica ABC123", async (plate) => {
     const { app, useCases, sessionCookieOf } = await makeApp();
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/vehicles",
-      payload: '{"plate":"ABC123"}',
-      headers: { cookie: sessionCookieOf(NORTE), "content-type": "text/plain" },
-    });
+    await post(app, { plate }, sessionCookieOf(NORTE));
 
-    expect(response.statusCode).toBe(415);
+    expect(useCases.createVehicle).toHaveBeenCalledExactlyOnceWith({ identity: NORTE, vehicle: { plate: "ABC123", label: null } });
+  });
+
+  // Anti-CSRF: un formulario de otro sitio solo puede enviar estos tipos (o ninguno) sin preflight de CORS. Con la cookie de sesión puesta,
+  // la ruta no debe ejecutar el alta.
+  it.each(["application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "text/plain", undefined])(
+    "un POST con cookie y content-type %s responde 415 sin llegar al caso de uso",
+    async (contentType) => {
+      const { app, useCases, sessionCookieOf } = await makeApp();
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/vehicles",
+        payload: "plate=ABC123",
+        headers: { cookie: sessionCookieOf(NORTE), ...(contentType !== undefined && { "content-type": contentType }) },
+      });
+
+      expect(response.statusCode).toBe(415);
+      expect(apiErrorSchema.parse(response.json()).error.code).toBe("unsupported_media_type");
+      expect(useCases.createVehicle).not.toHaveBeenCalled();
+    },
+  );
+
+  it("sin sesión, el tercer POST desde la misma IP responde 429 (el límite también cuenta a quien no tiene cookie) y otra IP no se ve afectada", async () => {
+    const { app, useCases } = await makeApp({ createVehicleLimit: { max: 2, timeWindowMs: 60_000 } });
+    const from = (ip: string) =>
+      app.inject({ method: "POST", url: "/v1/vehicles", payload: { plate: "ABC123" }, headers: { "x-forwarded-for": ip } });
+
+    expect((await from("192.0.2.1")).statusCode).toBe(401);
+    expect((await from("192.0.2.1")).statusCode).toBe(401);
+    const blocked = await from("192.0.2.1");
+
+    expect(blocked.statusCode).toBe(429);
+    expect(apiErrorSchema.parse(blocked.json()).error.code).toBe("rate_limited");
+    expect(Number(blocked.headers["retry-after"])).toBeGreaterThan(0);
+    expect((await from("192.0.2.2")).statusCode).toBe(401);
     expect(useCases.createVehicle).not.toHaveBeenCalled();
   });
 
