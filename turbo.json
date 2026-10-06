@@ -44,7 +44,8 @@
         "FLEET_APP_PASSWORD",
         "FLEET_RO_PASSWORD",
         "KAFKA_BROKERS",
-        "LOG_LEVEL"
+        "LOG_LEVEL",
+        "SEED_USER_PASSWORD"
       ]
     }
   }

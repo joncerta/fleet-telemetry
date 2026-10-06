@@ -1,0 +1,10 @@
+# Copia a backend.hcl (no se commitea) y úsalo así:  terraform init -backend-config=backend.hcl
+# Sin credenciales: la autenticación sale del entorno (OIDC en CI, SSO o variables AWS_* en local).
+# El bucket y la clave KMS los crea ../../bootstrap.
+
+bucket       = "<bucket-de-estado>"
+key          = "fleet-telemetry/dev/platform.tfstate"
+region       = "<region del bucket>"
+encrypt      = true
+kms_key_id   = "<arn de la clave KMS del bucket de estado>"
+use_lockfile = true

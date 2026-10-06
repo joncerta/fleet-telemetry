@@ -47,6 +47,12 @@ const back = (migrationsDir: string, target?: RollbackTarget, lockTimeoutMs?: nu
 
 const status = (migrationsDir: string) => getMigrationStatus({ adminUrl: db.adminUrl, migrationsDir, logger });
 
+/** Base temporal nueva: un test que prueba un fallo y su control positivo no puede reutilizar el estado a medias del primero. */
+async function resetDatabase(): Promise<void> {
+  await db.drop();
+  db = await createTempDatabase(config.DATABASE_ADMIN_URL);
+}
+
 async function query<T extends Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
   const client = new Client({ connectionString: db.adminUrl });
   await client.connect();
@@ -369,6 +375,7 @@ type Row = Record<string, unknown>;
 /** Esquemas internos de Timescale: se excluyen del snapshot junto con los de Postgres. */
 const TIMESCALE_SCHEMAS = [
   "_timescaledb_internal",
+  "_timescaledb_functions",
   "_timescaledb_catalog",
   "_timescaledb_cache",
   "_timescaledb_config",
@@ -389,20 +396,50 @@ const USER_RELATION = `
   AND c.oid IS DISTINCT FROM to_regclass('public.schema_migrations')
   AND NOT EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid = c.oid AND i.indrelid = to_regclass('public.schema_migrations'))`;
 
+/**
+ * Esquemas (de usuario o de Postgres) cuyos objetos no cuentan: los catálogos, los de Timescale, los TOAST y los temporales.
+ * Alias `n` (pg_namespace).
+ */
+const USER_SCHEMA = `
+  n.nspname NOT IN ('pg_catalog', 'information_schema', ${TIMESCALE_SCHEMAS.map((s) => `'${s}'`).join(", ")})
+  AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'`;
+
+/**
+ * Los continuous aggregates guardan ids numéricos en su definición (la hypertable materializada, las vistas parcial y directa y
+ * la marca de agua) que cambian al recrearlos. Se normalizan para comparar la definición y no el id.
+ */
+const normalizeViewDefinition = (expr: string): string =>
+  `regexp_replace(regexp_replace(${expr}, '(_materialized_hypertable|_partial_view|_direct_view)_[0-9]+', '\\1_N', 'g'), 'cagg_watermark\\([0-9]+\\)', 'cagg_watermark(N)', 'g')`;
+
+/**
+ * Si la hypertable de `alias` (una vista de `timescaledb_information` con `hypertable_schema` y `hypertable_name`) es la
+ * materializada de un continuous aggregate, se traduce a la vista del usuario: el nombre `_materialized_hypertable_N` lleva un
+ * id que cambia al recrear. Devuelve el LEFT JOIN a `timescaledb_information.continuous_aggregates` con alias `ca`.
+ */
+const TARGET_JOIN = (alias: string): string =>
+  `LEFT JOIN timescaledb_information.continuous_aggregates ca
+     ON ca.materialization_hypertable_schema = ${alias}.hypertable_schema AND ca.materialization_hypertable_name = ${alias}.hypertable_name`;
+
 interface SchemaSnapshot {
   extensions: Row[];
   roles: Row[];
+  schemas: Row[];
   relations: Row[];
   columns: Row[];
   constraints: Row[];
   indexes: Row[];
   routines: Row[];
+  views: Row[];
+  triggers: Row[];
   types: Row[];
   databaseGrants: Row[];
   schemaGrants: Row[];
   defaultAcls: Row[];
   tableGrants: Row[];
   hypertables: Row[];
+  dimensions: Row[];
+  compressionSettings: Row[];
+  continuousAggregates: Row[];
   jobs: Row[];
 }
 
@@ -415,6 +452,13 @@ async function snapshot(): Promise<SchemaSnapshot> {
   return {
     extensions: await query("SELECT extname FROM pg_extension WHERE extname <> 'plpgsql' ORDER BY extname"),
     roles: await query("SELECT rolname FROM pg_roles WHERE rolname IN ('fleet_app', 'fleet_ro') ORDER BY rolname"),
+    // Esquemas de usuario distintos de `public`. Los de una extensión (deptype 'e') no cuentan.
+    schemas: await query(
+      `SELECT n.nspname AS name FROM pg_namespace n
+       WHERE ${USER_SCHEMA} AND n.nspname <> 'public'
+         AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_namespace'::regclass AND d.objid = n.oid AND d.deptype = 'e')
+       ORDER BY 1`,
+    ),
     relations: await query(
       `SELECT n.nspname AS schema, c.relname AS name, c.relkind::text AS kind
        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -444,12 +488,29 @@ async function snapshot(): Promise<SchemaSnapshot> {
        JOIN pg_namespace n ON n.oid = c.relnamespace
        WHERE n.nspname = 'public' AND ${USER_RELATION} ORDER BY 1`,
     ),
+    // Funciones y procedimientos de cualquier esquema de usuario, con el md5 de su definición completa (cuerpo, volatilidad, atributos):
+    // un `CREATE OR REPLACE` que el down no restaura cambia el md5 aunque el nombre y los argumentos sigan iguales. Los agregados no
+    // admiten `pg_get_functiondef`: de esos solo cuenta la firma.
     routines: await query(
-      `SELECT p.proname AS name, pg_get_function_identity_arguments(p.oid) AS args
+      `SELECT n.nspname AS schema, p.proname AS name, pg_get_function_identity_arguments(p.oid) AS args,
+              CASE WHEN p.prokind = 'a' THEN NULL ELSE md5(pg_get_functiondef(p.oid)) END AS definition_md5
        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-       WHERE n.nspname = 'public'
+       WHERE ${USER_SCHEMA}
          AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
-       ORDER BY 1, 2`,
+       ORDER BY 1, 2, 3`,
+    ),
+    // Vistas, vistas materializadas y continuous aggregates (que son vistas): su definición, no solo su nombre y sus columnas.
+    views: await query(
+      `SELECT n.nspname AS schema, c.relname AS name, c.relkind::text AS kind,
+              ${normalizeViewDefinition("pg_get_viewdef(c.oid, true)")} AS definition
+       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE c.relkind IN ('v', 'm') AND ${USER_RELATION} ORDER BY 1, 2`,
+    ),
+    // Triggers de usuario (sin los internos de las FK).
+    triggers: await query(
+      `SELECT n.nspname AS schema, c.relname AS "table", t.tgname AS name, pg_get_triggerdef(t.oid, true) AS definition
+       FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+       WHERE NOT t.tgisinternal AND ${USER_RELATION} ORDER BY 1, 2, 3`,
     ),
     types: await query(
       `SELECT t.typname AS name, t.typtype::text AS kind
@@ -480,19 +541,47 @@ async function snapshot(): Promise<SchemaSnapshot> {
        JOIN pg_roles g ON g.oid = a.grantee
        WHERE g.rolname IN ('fleet_app', 'fleet_ro') AND ${USER_RELATION} ORDER BY 1, 2, 3, 4`,
     ),
-    // Hypertables y jobs de usuario (id >= 1000) solo si la extensión está instalada. Se omiten los ids numéricos,
-    // que cambian al recrear.
+    // Lo de Timescale solo si la extensión está instalada. Se omiten los ids numéricos (cambian al recrear) y la hypertable
+    // materializada de un continuous aggregate se traduce a su vista (`TARGET_JOIN`).
     hypertables: timescale
       ? await query(
-          `SELECT hypertable_schema AS schema, hypertable_name AS name, num_dimensions, compression_enabled
-           FROM timescaledb_information.hypertables ORDER BY 1, 2`,
+          `SELECT COALESCE(ca.view_schema, h.hypertable_schema) AS schema, COALESCE(ca.view_name, h.hypertable_name) AS name,
+                  h.num_dimensions, h.compression_enabled
+           FROM timescaledb_information.hypertables h ${TARGET_JOIN("h")} ORDER BY 1, 2`,
         )
       : [],
+    // Dimensiones: el intervalo de chunk (`set_chunk_time_interval`) y las particiones de cada hypertable.
+    dimensions: timescale
+      ? await query(
+          `SELECT COALESCE(ca.view_schema, h.hypertable_schema) AS schema, COALESCE(ca.view_name, h.hypertable_name) AS name,
+                  h.dimension_number, h.column_name, h.column_type::text AS column_type, h.dimension_type,
+                  h.time_interval::text AS time_interval, h.integer_interval::text AS integer_interval, h.num_partitions
+           FROM timescaledb_information.dimensions h ${TARGET_JOIN("h")} ORDER BY 1, 2, 3`,
+        )
+      : [],
+    // Ajustes de compresión: segmentby y orderby por columna.
+    compressionSettings: timescale
+      ? await query(
+          `SELECT COALESCE(ca.view_schema, h.hypertable_schema) AS schema, COALESCE(ca.view_name, h.hypertable_name) AS name,
+                  h.attname, h.segmentby_column_index, h.orderby_column_index, h.orderby_asc, h.orderby_nullsfirst
+           FROM timescaledb_information.compression_settings h ${TARGET_JOIN("h")} ORDER BY 1, 2, 3`,
+        )
+      : [],
+    continuousAggregates: timescale
+      ? await query(
+          `SELECT view_schema AS schema, view_name AS name, hypertable_schema AS source_schema, hypertable_name AS source_name,
+                  materialized_only, compression_enabled
+           FROM timescaledb_information.continuous_aggregates ORDER BY 1, 2`,
+        )
+      : [],
+    // Jobs de usuario (id >= 1000). La config se normaliza: sin `hypertable_id` ni `mat_hypertable_id` (ids que cambian al
+    // recrear) y con la hypertable materializada traducida a su vista.
     jobs: timescale
       ? await query(
-          `SELECT proc_schema, proc_name, hypertable_schema, hypertable_name, schedule_interval::text AS schedule_interval,
-                  (config - 'hypertable_id')::text AS config
-           FROM timescaledb_information.jobs WHERE job_id >= 1000 ORDER BY 1, 2, 3, 4`,
+          `SELECT j.proc_schema, j.proc_name, COALESCE(ca.view_schema, j.hypertable_schema) AS target_schema,
+                  COALESCE(ca.view_name, j.hypertable_name) AS target_name, j.schedule_interval::text AS schedule_interval,
+                  (j.config - 'hypertable_id' - 'mat_hypertable_id')::text AS config
+           FROM timescaledb_information.jobs j ${TARGET_JOIN("j")} WHERE j.job_id >= 1000 ORDER BY 1, 2, 3, 4`,
         )
       : [],
   };
@@ -651,6 +740,174 @@ describe("el test de ida y vuelta detecta un down incompleto", () => {
     await writePair("004_idx", "CREATE INDEX base_i_idx ON base (i);", "DROP INDEX base_i_idx;");
 
     await roundTrip(dir, false);
+  });
+
+  // H2: el snapshot compara DEFINICIONES, no solo nombres. Cada caso tiene su control positivo (el down que sí restaura pasa).
+  it("falla si el down no restaura una función reemplazada (mismo nombre y argumentos, otro cuerpo)", async () => {
+    await writePair("001_fn", "CREATE FUNCTION swapped_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1';", "DROP FUNCTION swapped_fn();");
+    const replace = "CREATE OR REPLACE FUNCTION swapped_fn() RETURNS integer LANGUAGE sql AS 'SELECT 2';";
+    await writePair("002_replace", replace, "SELECT 1;");
+
+    await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 002_replace\.down\.sql/);
+  });
+
+  it("acepta el down que restaura la función reemplazada (control positivo)", async () => {
+    await writePair("001_fn", "CREATE FUNCTION swapped_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1';", "DROP FUNCTION swapped_fn();");
+    await writePair(
+      "002_replace",
+      "CREATE OR REPLACE FUNCTION swapped_fn() RETURNS integer LANGUAGE sql AS 'SELECT 2';",
+      "CREATE OR REPLACE FUNCTION swapped_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1';",
+    );
+
+    await roundTrip(dir, false);
+  });
+
+  it("falla si el down no restaura una función cuyo atributo cambió (volatilidad), aunque el cuerpo sea el mismo", async () => {
+    await writePair("001_fn", "CREATE FUNCTION attr_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1';", "DROP FUNCTION attr_fn();");
+    await writePair("002_attr", "ALTER FUNCTION attr_fn() IMMUTABLE;", "SELECT 1;");
+
+    await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 002_attr\.down\.sql/);
+  });
+
+  it("falla si el down no restaura una vista reemplazada, y acepta el que sí (control positivo)", async () => {
+    await writePair("001_view", "CREATE VIEW swapped_view AS SELECT 1 AS n;", "DROP VIEW swapped_view;");
+    await writePair("002_replace", "CREATE OR REPLACE VIEW swapped_view AS SELECT 2 AS n;", "SELECT 1;");
+    await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 002_replace\.down\.sql/);
+
+    await resetDatabase();
+    await writePair("002_replace", "CREATE OR REPLACE VIEW swapped_view AS SELECT 2 AS n;", "CREATE OR REPLACE VIEW swapped_view AS SELECT 1 AS n;");
+    await roundTrip(dir, false);
+  });
+
+  it("falla si el down deja una vista materializada", async () => {
+    await writePair("001_base", "CREATE TABLE base (i integer);", "DROP TABLE base;");
+    await writePair("002_matview", "CREATE MATERIALIZED VIEW base_mv AS SELECT i FROM base;", "SELECT 1;");
+
+    await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 002_matview\.down\.sql/);
+  });
+
+  it("falla si el down deja un trigger, y acepta el que lo quita (control positivo)", async () => {
+    await writePair(
+      "001_base",
+      [
+        "CREATE TABLE base (i integer);",
+        "CREATE FUNCTION base_trg() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';",
+      ].join("\n"),
+      "DROP TABLE base; DROP FUNCTION base_trg();",
+    );
+    const trigger = "CREATE TRIGGER base_audit BEFORE INSERT ON base FOR EACH ROW EXECUTE FUNCTION base_trg();";
+    await writePair("002_trigger", trigger, "SELECT 1;");
+    await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 002_trigger\.down\.sql/);
+
+    await resetDatabase();
+    await writePair("002_trigger", trigger, "DROP TRIGGER base_audit ON base;");
+    await roundTrip(dir, false);
+  });
+
+  it("falla si el down deja un esquema de usuario, y acepta el que lo borra (control positivo)", async () => {
+    await writePair("001_schema", "CREATE SCHEMA leaky_schema;", "SELECT 1;");
+    await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 001_schema\.down\.sql/);
+
+    await resetDatabase();
+    await writePair("001_schema", "CREATE SCHEMA leaky_schema;", "DROP SCHEMA leaky_schema;");
+    await roundTrip(dir, false);
+  });
+
+  it("falla si el down deja una función en un esquema que no es public", async () => {
+    await writePair("001_schema", "CREATE SCHEMA other_schema;", "DROP SCHEMA other_schema CASCADE;");
+    await writePair("002_fn", "CREATE FUNCTION other_schema.o_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1';", "SELECT 1;");
+
+    await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 002_fn\.down\.sql/);
+  });
+
+  describe("con TimescaleDB (la 001 real, que instala las extensiones)", () => {
+    /** Copia la 001 real al directorio de prueba y deja viva otra base que use los roles (el down de la 001 los conserva). */
+    async function withRealFirstMigration(): Promise<void> {
+      await createOtherDatabaseUsingRoles();
+      for (const name of ["001_extensions_and_roles.sql", "001_extensions_and_roles.down.sql"]) {
+        await writeFile(join(dir, name), await readFile(join(defaultMigrationsDir, name), "utf8"));
+      }
+    }
+    const HYPERTABLE_UP = [
+      "CREATE TABLE ts_data (t timestamptz NOT NULL, v integer NOT NULL, label text NOT NULL DEFAULT 'x');",
+      "SELECT create_hypertable('ts_data', 't', chunk_time_interval => INTERVAL '1 day');",
+    ].join("\n");
+
+    it("falla si el down no restaura el intervalo de chunk, y acepta el que sí (control positivo)", async () => {
+      await withRealFirstMigration();
+      await writePair("002_ts", HYPERTABLE_UP, "DROP TABLE ts_data;");
+      const change = "SELECT set_chunk_time_interval('ts_data', INTERVAL '6 hours');";
+      await writePair("003_interval", change, "SELECT 1;");
+      await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 003_interval\.down\.sql/);
+
+      await resetDatabase();
+      await writePair("003_interval", change, "SELECT set_chunk_time_interval('ts_data', INTERVAL '1 day');");
+      await roundTrip(dir, false);
+    });
+
+    it("falla si el down no restaura los ajustes de compresión (segmentby y orderby)", async () => {
+      await withRealFirstMigration();
+      await writePair("002_ts", HYPERTABLE_UP, "DROP TABLE ts_data;");
+      await writePair(
+        "003_compress",
+        "ALTER TABLE ts_data SET (timescaledb.compress, timescaledb.compress_segmentby = 'label', timescaledb.compress_orderby = 't DESC');",
+        "SELECT 1;",
+      );
+
+      await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 003_compress\.down\.sql/);
+    });
+
+    it("falla si el down no quita una política (un job de usuario), y acepta el que sí (control positivo)", async () => {
+      await withRealFirstMigration();
+      await writePair("002_ts", HYPERTABLE_UP, "DROP TABLE ts_data;");
+      const policy = "SELECT add_retention_policy('ts_data', INTERVAL '30 days');";
+      await writePair("003_retention", policy, "SELECT 1;");
+      await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 003_retention\.down\.sql/);
+
+      await resetDatabase();
+      await writePair("003_retention", policy, "SELECT remove_retention_policy('ts_data');");
+      await roundTrip(dir, false);
+    });
+
+    /** Continuous aggregate con datos y política de refresco: lo que traerá la 007. No cabe en una transacción (`WITH DATA`). */
+    const CAGG_UP = `-- migrate:no-transaction
+CREATE TABLE IF NOT EXISTS cg_raw (t timestamptz NOT NULL, v integer NOT NULL);
+SELECT create_hypertable('cg_raw', 't', if_not_exists => TRUE);
+CREATE MATERIALIZED VIEW IF NOT EXISTS cg_hourly WITH (timescaledb.continuous) AS
+  SELECT time_bucket('1 hour', t) AS bucket, sum(v) AS total FROM cg_raw GROUP BY 1 WITH DATA;
+SELECT add_continuous_aggregate_policy('cg_hourly', start_offset => INTERVAL '3 hours', end_offset => INTERVAL '1 hour',
+  schedule_interval => INTERVAL '1 hour', if_not_exists => TRUE);
+`;
+    const CAGG_DOWN = `-- migrate:no-transaction
+DROP MATERIALIZED VIEW IF EXISTS cg_hourly;
+DROP TABLE IF EXISTS cg_raw;
+`;
+
+    it("un continuous aggregate (vista, hypertable materializada y política) hace la ida y vuelta: los ids que cambian al recrearlo no cuentan", async () => {
+      await withRealFirstMigration();
+      await writePair("002_cagg", CAGG_UP, CAGG_DOWN);
+
+      await roundTrip(dir, false);
+
+      const state = await snapshot();
+      expect(state.continuousAggregates).toHaveLength(1);
+      expect(state.views.map((v) => v.name)).toEqual(["cg_hourly"]);
+      expect(state.views[0]?.definition).toMatch(/_materialized_hypertable_N/);
+      expect(state.jobs).toEqual([expect.objectContaining({ proc_name: "policy_refresh_continuous_aggregate", target_name: "cg_hourly" })]);
+      expect(String((state.jobs[0] as { config: string }).config)).not.toMatch(/hypertable_id/);
+    });
+
+    it("falla si el down no revierte un cambio de un continuous aggregate (materialized_only)", async () => {
+      await withRealFirstMigration();
+      await writePair("002_cagg", CAGG_UP, CAGG_DOWN);
+      await writePair(
+        "003_realtime",
+        "-- migrate:no-transaction\nALTER MATERIALIZED VIEW cg_hourly SET (timescaledb.materialized_only = false);\n",
+        "-- migrate:no-transaction\nSELECT 1;\n",
+      );
+
+      await expect(roundTrip(dir, false)).rejects.toThrow(/estado tras revertir 003_realtime\.down\.sql/);
+    });
   });
 
   it("falla si el up deja un default privilege que el down no revierte", async () => {

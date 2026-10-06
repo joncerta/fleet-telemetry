@@ -1,4 +1,5 @@
-# Solo infraestructura (sin perfil). El perfil `app` llega en la fase 4.
+# Sin perfil: solo infraestructura (timescaledb, redpanda, redpanda-init).
+# Perfil `app`: además migrate (un solo uso), ingest-gateway y processor. fleet-api, agent y web se agregan cuando existan.
 # Nunca `docker compose down -v`: borra el volumen de datos.
 name: fleet-telemetry
 
@@ -88,6 +89,131 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+
+  # --- Perfil `app` ---------------------------------------------------------------------------------------------
+  # Los hosts internos son los de la red de compose (timescaledb:5432, redpanda:9092); los valores de .env apuntan a
+  # 127.0.0.1 (para `pnpm dev` en el host) y aquí se sobrescriben. Las variables opcionales sin valor (`- NOMBRE`) se
+  # toman de .env o del entorno; si no están definidas, el servicio usa su valor por defecto (ver .env.example).
+
+  # Aplica las migraciones con el superusuario y queda inactivo y healthy (mismo patrón que redpanda-init: `up --wait`
+  # falla en compose v5.3 si un contenedor sale durante la espera). Si la migración falla, sale con error y `up` falla.
+  migrate:
+    profiles: ["app"]
+    image: fleet-telemetry/migrate:local
+    build:
+      context: .
+      dockerfile: infra/docker/service.Dockerfile
+      target: migrate
+      args:
+        SERVICE: platform
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      DATABASE_ADMIN_URL: "postgres://${POSTGRES_USER:?Falta POSTGRES_USER}:${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD}@timescaledb:5432/fleet"
+      FLEET_APP_PASSWORD: "${FLEET_APP_PASSWORD:?Falta FLEET_APP_PASSWORD, copia .env.example a .env}"
+      FLEET_RO_PASSWORD: "${FLEET_RO_PASSWORD:?Falta FLEET_RO_PASSWORD, copia .env.example a .env}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      DB_MIGRATE_LOCK_TIMEOUT_MS: "${DB_MIGRATE_LOCK_TIMEOUT_MS:-8000}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rm -f /tmp/migrated
+        node packages/platform/dist/cli/migrate.js
+        touch /tmp/migrated
+        exec sleep infinity
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/migrated"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+
+  ingest-gateway:
+    profiles: ["app"]
+    image: fleet-telemetry/ingest-gateway:local
+    build:
+      context: .
+      dockerfile: infra/docker/service.Dockerfile
+      target: service
+      args:
+        SERVICE: ingest-gateway
+    depends_on:
+      redpanda-init:
+        condition: service_healthy
+      migrate:
+        condition: service_healthy
+    restart: unless-stopped
+    # Mayor que SHUTDOWN_TIMEOUT_MS (15 s por defecto): si no, Docker mata el proceso antes del apagado ordenado.
+    stop_grace_period: 30s
+    ports:
+      - "127.0.0.1:4001:4001"
+    environment:
+      INGEST_GATEWAY_HOST: "0.0.0.0"
+      INGEST_GATEWAY_PORT: "4001"
+      DATABASE_URL: "postgres://fleet_app:${FLEET_APP_PASSWORD:?Falta FLEET_APP_PASSWORD, copia .env.example a .env}@timescaledb:5432/fleet"
+      KAFKA_BROKERS: "redpanda:9092"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      SHUTDOWN_TIMEOUT_MS: "${SHUTDOWN_TIMEOUT_MS:-15000}"
+      INGEST_GATEWAY_BODY_LIMIT_BYTES:
+      INGEST_GATEWAY_TRUSTED_PROXY_HOPS:
+      INGEST_GATEWAY_RATE_LIMIT_MAX:
+      INGEST_GATEWAY_RATE_LIMIT_WINDOW_MS:
+      INGEST_GATEWAY_AUTH_FAILURE_LIMIT_MAX:
+      INGEST_GATEWAY_AUTH_FAILURE_LIMIT_WINDOW_MS:
+      INGEST_GATEWAY_DEVICE_RATE_LIMIT_MAX:
+      INGEST_GATEWAY_DEVICE_RATE_LIMIT_WINDOW_MS:
+      INGEST_GATEWAY_TOKEN_CACHE_TTL_MS:
+      INGEST_GATEWAY_TOKEN_CACHE_NEGATIVE_TTL_MS:
+      INGEST_GATEWAY_TOKEN_CACHE_MAX_ENTRIES:
+      INGEST_GATEWAY_FUTURE_TOLERANCE_MS:
+      INGEST_GATEWAY_MAX_AGE_MS:
+      INGEST_GATEWAY_MAX_POINT_BYTES:
+      INGEST_GATEWAY_PUBLISH_TIMEOUT_MS:
+      INGEST_GATEWAY_KAFKA_RETRIES:
+      INGEST_GATEWAY_MAX_IN_FLIGHT_PUBLICATIONS:
+    healthcheck:
+      # La imagen no trae curl: `fetch` de Node. /health responde 503 si falta la base o Kafka.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4001/health',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Sin healthcheck: el processor no expone HTTP todavía (pendiente para backend-engineer: /health o heartbeat de
+  # archivo). `up --wait` espera a que esté `running`; si el consumer cae sin reinicio el proceso sale (ADR-005.12) y
+  # `restart: unless-stopped` lo levanta.
+  processor:
+    profiles: ["app"]
+    image: fleet-telemetry/processor:local
+    build:
+      context: .
+      dockerfile: infra/docker/service.Dockerfile
+      target: service
+      args:
+        SERVICE: processor
+    depends_on:
+      redpanda-init:
+        condition: service_healthy
+      migrate:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DATABASE_URL: "postgres://fleet_app:${FLEET_APP_PASSWORD:?Falta FLEET_APP_PASSWORD, copia .env.example a .env}@timescaledb:5432/fleet"
+      KAFKA_BROKERS: "redpanda:9092"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      SHUTDOWN_TIMEOUT_MS: "${SHUTDOWN_TIMEOUT_MS:-15000}"
+      PROCESSOR_CONSUMER_GROUP:
+      PROCESSOR_MAX_ATTEMPTS:
+      PROCESSOR_RETRY_INITIAL_DELAY_MS:
+      PROCESSOR_RETRY_MAX_DELAY_MS:
+      PROCESSOR_INSERT_CHUNK_SIZE:
+      PROCESSOR_DLQ_PUBLISH_TIMEOUT_MS:
 
 volumes:
   timescaledb-data:

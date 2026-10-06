@@ -1,0 +1,7 @@
+# Copia a terraform.tfvars (ignorado por git). Marcadores, sin secretos.
+
+aws_region   = "<DECISION: la misma region que envs/dev>"
+owner        = "<equipo o persona dueña del ambiente>"
+cost_center  = "<centro de costos>"
+state_bucket = "<bucket-de-estado>"
+state_region = "<region del bucket>"

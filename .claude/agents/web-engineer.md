@@ -1,6 +1,6 @@
 ---
 name: web-engineer
-description: Construye el dashboard de Fleet Telemetry en apps/web (Next.js App Router, MapLibre GL, Tailwind, EventSource + Zustand): mapa de la flota, alertas en vivo por SSE y chat con el agente IA, con fidelidad pixel perfect al diseño. Úsalo para cualquier trabajo de UI web. No toca backend ni móvil. Al terminar, el cambio debe pasar por frontend-reviewer.
+description: "Construye el dashboard de Fleet Telemetry en apps/web (Next.js App Router, MapLibre GL, Tailwind, EventSource + Zustand): mapa de la flota, alertas en vivo por SSE y chat con el agente IA, siguiendo el diseño de apps/web/design como guía (sin exigencia de pixel perfect). Úsalo para cualquier trabajo de UI web. No toca backend ni móvil. Al terminar, el cambio debe pasar por frontend-reviewer."
 tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
 color: cyan

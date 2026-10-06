@@ -14,6 +14,7 @@ import { e2eConfigSchema } from "./support.js";
 // Todavía no hay flujos de negocio (la ingesta llega con sus casos de uso): esto prueba que el arnés y el cableado base
 // funcionan contra el stack real.
 const gatewayUrl = inject("gatewayUrl");
+const fleetApiUrl = inject("fleetApiUrl");
 const processorGroup = inject("processorGroup");
 const rawBacklogEnd = inject("rawBacklogEnd");
 const logDir = inject("serviceLogDir");
@@ -66,6 +67,38 @@ describe("ingest-gateway levantado desde dist/", () => {
   });
 });
 
+describe("fleet-api levantado desde dist/", () => {
+  it("usa el puerto propio del e2e, no el 4002 de pnpm dev", () => {
+    expect(new URL(fleetApiUrl).port).toBe("14002");
+  });
+
+  it("GET /health responde 200 con la base arriba, sin datos sensibles", async () => {
+    const response = await fetch(`${fleetApiUrl}/health`);
+
+    expect(response.status).toBe(200);
+    const health = healthResponseSchema.parse(await response.json());
+    expect(health).toEqual({ status: "ok", checks: { database: "up" } });
+    expect(JSON.stringify(health)).not.toMatch(/postgres|127\.0\.0\.1|password|fleet_app|secret/i);
+  });
+
+  it("una ruta inexistente responde 404 con apiErrorSchema y devuelve el correlationId recibido", async () => {
+    const correlationId = `e2e-${randomUUID()}`;
+
+    const response = await fetch(`${fleetApiUrl}/no-existe`, { headers: { "x-correlation-id": correlationId } });
+
+    expect(response.status).toBe(404);
+    expect(apiErrorSchema.parse(await response.json()).error.code).toBe("not_found");
+    expect(response.headers.get("x-correlation-id")).toBe(correlationId);
+  });
+
+  it("una lectura sin sesión responde 401", async () => {
+    const response = await fetch(`${fleetApiUrl}/v1/summary`);
+
+    expect(response.status).toBe(401);
+    expect(apiErrorSchema.parse(await response.json()).error.code).toBe("unauthorized");
+  });
+});
+
 describe("processor levantado desde dist/", () => {
   it("consume telemetry.raw con el consumer group propio del e2e (estable y con particiones asignadas)", async () => {
     expect(processorGroup).toMatch(/^processor-e2e-[0-9a-f]{8}$/);
@@ -75,6 +108,8 @@ describe("processor levantado desde dist/", () => {
 
   // Hallazgo M-d: un grupo nuevo con fromBeginning leería todo telemetry.raw (días de corridas anteriores), republicaría sus rechazos en la
   // DLQ y reinsertaría telemetría de tenants e2e ya borrados. El arnés fija los offsets del grupo al final ANTES de lanzar el processor.
+  // Ojo: con `telemetry.raw` vacío (un CI limpio) este test pasa aunque el anclaje no haga nada; quien prueba `pinGroupToTopicEnd`
+  // con un backlog real es `harness-anchor.e2e.test.ts`.
   it("arranca anclado al final de telemetry.raw: ningún tramo procesado empieza antes del fin que tenía el tópico al anclar el grupo", () => {
     expect(Object.keys(rawBacklogEnd).sort()).toEqual(["0", "1", "2"]);
     const chunks = readFileSync(join(logDir, "processor.log"), "utf8")
@@ -98,7 +133,7 @@ describe("processor levantado desde dist/", () => {
 describe("logs de los servicios", () => {
   it("quedan en un archivo por servicio en la carpeta de la corrida", () => {
     expect(existsSync(logDir)).toBe(true);
-    expect(readdirSync(logDir).sort()).toEqual(["ingest-gateway.log", "processor.log"]);
+    expect(readdirSync(logDir).sort()).toEqual(["fleet-api.log", "ingest-gateway.log", "processor.log"]);
     expect(existsSync(join(logDir, "ingest-gateway.log"))).toBe(true);
   });
 });
