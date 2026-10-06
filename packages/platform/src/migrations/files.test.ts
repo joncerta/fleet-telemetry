@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checksumOf, loadMigrationFiles, MigrationError } from "./files.js";
+import { checksumOf, hasNoTransactionMarker, loadMigrationFiles, MigrationError, NO_TRANSACTION_MARKER } from "./files.js";
 
 let dir: string;
 
@@ -118,6 +118,45 @@ describe("loadMigrationFiles", () => {
 
   it("devuelve una lista vacía si la carpeta no tiene migraciones", async () => {
     expect(await loadMigrationFiles(dir)).toEqual([]);
+  });
+});
+
+describe("migraciones sin transacción", () => {
+  it("por defecto son transaccionales", async () => {
+    await writePair("001_one", "SELECT 1;", "SELECT 0;");
+
+    expect((await loadMigrationFiles(dir))[0]?.transactional).toBe(true);
+  });
+
+  it("el marcador en la primera línea del up y del down las vuelve no transaccionales (también con CRLF)", async () => {
+    await writePair("001_one", `${NO_TRANSACTION_MARKER}\r\nSELECT 1;`, `${NO_TRANSACTION_MARKER}\nSELECT 0;`);
+
+    expect((await loadMigrationFiles(dir))[0]?.transactional).toBe(false);
+  });
+
+  it("falla si solo el up o solo el down llevan el marcador", async () => {
+    await writePair("001_one", `${NO_TRANSACTION_MARKER}\nSELECT 1;`, "SELECT 0;");
+    await expect(loadMigrationFiles(dir)).rejects.toThrow(/deben coincidir en el marcador/);
+
+    await writePair("001_one", "SELECT 1;", `${NO_TRANSACTION_MARKER}\nSELECT 0;`);
+    await expect(loadMigrationFiles(dir)).rejects.toThrow(/deben coincidir en el marcador/);
+  });
+
+  it.each([
+    ["SELECT 1;\n-- migrate:no-transaction", false],
+    ["\n-- migrate:no-transaction\nSELECT 1;", false],
+    ["-- migrate:no-transactions\nSELECT 1;", false],
+    ["-- otro comentario -- migrate:no-transaction\nSELECT 1;", false],
+    ["/* migrate:no-transaction */\nSELECT 1;", false],
+    ["-- migrate:no-transaction", true],
+    ["-- migrate:no-transaction  \nSELECT 1;", true],
+    ["﻿-- migrate:no-transaction\nSELECT 1;", true],
+  ])("hasNoTransactionMarker(%j) = %s", (sql, expected) => {
+    expect(hasNoTransactionMarker(sql)).toBe(expected);
+  });
+
+  it("el marcador forma parte del checksum: añadirlo después de aplicar la migración la haría fallar", () => {
+    expect(checksumOf(`${NO_TRANSACTION_MARKER}\nSELECT 1;`)).not.toBe(checksumOf("SELECT 1;"));
   });
 });
 

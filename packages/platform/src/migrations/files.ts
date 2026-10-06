@@ -20,6 +20,30 @@ export interface MigrationFile {
   readonly downFileName: string;
   readonly downChecksum: string;
   readonly downSql: string;
+  /**
+   * `false` si el up y el down llevan `-- migrate:no-transaction` en la primera línea: el runner ejecuta cada sentencia por
+   * separado, sin transacción, y registra la migración después del éxito. Ver `NO_TRANSACTION_MARKER`.
+   */
+  readonly transactional: boolean;
+}
+
+/**
+ * Marcador de una migración sin transacción: debe ser LA PRIMERA LÍNEA del up y también la del down (el cargador falla si solo
+ * uno lo lleva). Para lo que Postgres o TimescaleDB no admiten dentro de una transacción (`CREATE INDEX CONCURRENTLY`, un
+ * continuous aggregate `WITH DATA`, `refresh_continuous_aggregate`).
+ *
+ * **Una migración así tiene que ser idempotente sentencia por sentencia** (`IF NOT EXISTS`, `IF EXISTS`, `CREATE OR REPLACE`...).
+ * Sin transacción no hay reversión: si una sentencia falla, las anteriores quedan hechas y la migración NO queda registrada, así
+ * que el siguiente `db:migrate` la vuelve a ejecutar desde la primera sentencia; igual el down, si falla a la mitad. Y si el
+ * proceso muere entre el último efecto y el registro, ocurre lo mismo. Las sentencias se separan con
+ * `splitSqlStatements`; el script no puede usar metacomandos de `psql`.
+ */
+export const NO_TRANSACTION_MARKER = "-- migrate:no-transaction";
+
+/** `true` si la primera línea del script (sin BOM ni espacios sobrantes) es exactamente el marcador. */
+export function hasNoTransactionMarker(sql: string): boolean {
+  const firstLine = sql.replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0] ?? "";
+  return firstLine.trim() === NO_TRANSACTION_MARKER;
 }
 
 const UP_FILE = /^(\d{3,})_([a-z0-9][a-z0-9_]*)\.sql$/;
@@ -93,6 +117,13 @@ export async function loadMigrationFiles(dir: string): Promise<MigrationFile[]> 
     }
     const sql = await readFile(join(dir, up.fileName), "utf8");
     const downSql = await readFile(join(dir, down.fileName), "utf8");
+    const noTransaction = hasNoTransactionMarker(sql);
+    if (noTransaction !== hasNoTransactionMarker(downSql)) {
+      throw new MigrationError(
+        `${up.fileName} y ${down.fileName} deben coincidir en el marcador "${NO_TRANSACTION_MARKER}" de la primera línea: ` +
+          "un up sin transacción con un down transaccional (o al revés) deja una reversión que no se puede ejecutar como se escribió.",
+      );
+    }
     files.push({
       version: up.version,
       name: up.name,
@@ -102,6 +133,7 @@ export async function loadMigrationFiles(dir: string): Promise<MigrationFile[]> 
       downFileName: down.fileName,
       downChecksum: checksumOf(downSql),
       downSql,
+      transactional: !noTransaction,
     });
   }
 
