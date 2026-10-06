@@ -180,21 +180,20 @@ function fleetModel<M extends z.ZodType, A extends z.ZodType, K extends z.ZodTyp
 
   /** Posición GeoJSON `[lng, lat]` (regla 13: longitud primero). GeoJSON admite un tercer valor (altitud): se tolera. */
   const position = z.tuple([lon, lat], z.number().finite());
+  const zoneFeature = z.object({
+    type: z.literal("Feature"),
+    geometry: z.object({
+      type: z.literal("Polygon"),
+      coordinates: z
+        .array(z.array(position).min(4))
+        .min(1)
+        .describe("Anillos del polígono: el primero es el exterior. Cada anillo es una lista cerrada de `[lng, lat]` (mínimo 4). Desde v1."),
+    }),
+    properties: zoneProperties,
+  });
   const zoneFeatureCollection = z.object({
     type: z.literal("FeatureCollection"),
-    features: z.array(
-      z.object({
-        type: z.literal("Feature"),
-        geometry: z.object({
-          type: z.literal("Polygon"),
-          coordinates: z
-            .array(z.array(position).min(4))
-            .min(1)
-            .describe("Anillos del polígono: el primero es el exterior. Cada anillo es una lista cerrada de `[lng, lat]` (mínimo 4). Desde v1."),
-        }),
-        properties: zoneProperties,
-      }),
-    ),
+    features: z.array(zoneFeature),
   });
 
   const stoppedVehiclesResponse = z.object({
@@ -249,6 +248,7 @@ function fleetModel<M extends z.ZodType, A extends z.ZodType, K extends z.ZodTyp
   return {
     vehicleState,
     alert,
+    zoneFeature,
     zoneFeatureCollection,
     stoppedVehiclesResponse,
     alertsResponse,
@@ -276,6 +276,16 @@ export type Alert = z.infer<typeof alertSchema>;
 /** Igual, TOLERANTE: un `type` desconocido se lee como `"unknown"`. Desde v1. */
 export const alertTolerantSchema = tolerant.alert;
 export type AlertTolerant = z.infer<typeof alertTolerantSchema>;
+
+/**
+ * Una zona como GeoJSON `Feature` de `Polygon`, coordenadas `[lng, lat]` (regla 13). Elemento de la colección de
+ * `GET /v1/zones/geojson` y respuesta (201) de `POST /v1/zones`. Variante ESTRICTA. Desde v1.
+ */
+export const zoneFeatureSchema = strict.zoneFeature;
+export type ZoneFeature = z.infer<typeof zoneFeatureSchema>;
+/** Igual, TOLERANTE: un `kind` desconocido se lee como `"unknown"`. Desde v1. */
+export const zoneFeatureTolerantSchema = tolerant.zoneFeature;
+export type ZoneFeatureTolerant = z.infer<typeof zoneFeatureTolerantSchema>;
 
 /**
  * Zonas del tenant como GeoJSON `FeatureCollection` de `Polygon`, coordenadas `[lng, lat]` (regla 13). Respuesta de
@@ -557,3 +567,90 @@ export const userListResponseSchema = z.object({
   items: z.array(userListItemSchema).describe("Usuarios del tenant, ordenados por nombre. A lo sumo `limit`. Desde v1."),
 });
 export type UserListResponse = z.infer<typeof userListResponseSchema>;
+
+/**
+ * Alta de zonas desde el dashboard (`POST /v1/zones`). Todo v1 y ADITIVO: esquemas y constantes nuevos; la forma de
+ * `zoneFeatureCollectionSchema` no cambia (solo se extrajo su elemento como `zoneFeatureSchema`). La entrada solo tiene variante
+ * ESTRICTA (la consume el servidor). El `tenantId` y el `zoneId` NUNCA viajan en el cuerpo: el tenant sale de la sesión (regla 4) y
+ * el id lo genera el servidor.
+ */
+
+/** Máximo del nombre de una zona, en caracteres, tras recortarlo. Desde v1. */
+export const ZONE_NAME_MAX_LENGTH = 80;
+/** Máximo de vértices del polígono (sin contar la repetición del primero que cierra el anillo): el anillo trae a lo sumo este número + 1 posiciones. Desde v1. */
+export const ZONE_MAX_VERTICES = 200;
+/** Código de `apiErrorSchema` de `POST /v1/zones` (409) cuando el nombre ya existe en el tenant. Desde v1. */
+export const ZONE_NAME_TAKEN_ERROR_CODE = "zone_name_taken";
+/** Código de `apiErrorSchema` de `POST /v1/zones` (400) cuando PostGIS considera inválido el polígono (por ejemplo, con auto-intersección). Desde v1. */
+export const INVALID_GEOMETRY_ERROR_CODE = "invalid_geometry";
+
+/** Rectángulo en grados WGS84 (SRID 4326). Los bordes cuentan como dentro. */
+export interface BoundingBox {
+  readonly minLon: number;
+  readonly maxLon: number;
+  readonly minLat: number;
+  readonly maxLat: number;
+}
+
+/**
+ * Área de operación: Colombia, incluidos San Andrés y Providencia (regla 13). ES UN RECTÁNGULO, NO UN POLÍGONO: deja pasar puntos de
+ * países vecinos que caen dentro del rectángulo y solo descarta lo evidentemente ajeno (otros continentes, un GPS en 0,0 o lat y lon
+ * intercambiadas). Mismos límites que el filtro de área del processor (`services/processor/src/domain/operating-area.ts`, que los
+ * documenta); mientras el processor mantenga su copia, quien cambie uno debe cambiar el otro.
+ */
+export const COLOMBIA_BBOX: BoundingBox = { minLon: -82.0, maxLon: -66.8, minLat: -4.3, maxLat: 13.6 };
+
+/** Nombre de zona sin caracteres de control (Cc) ni de dirección bidi (U+202A-202E, U+2066-2069): un NUL rompe el INSERT y los bidi falsean lo que se ve. */
+const ZONE_NAME_PATTERN = /^[^\p{Cc}\u202A-\u202E\u2066-\u2069]*$/u;
+
+const ZONE_RING_BBOX_MESSAGE =
+  `Todas las coordenadas deben estar dentro de Colombia (longitud de ${COLOMBIA_BBOX.minLon} a ${COLOMBIA_BBOX.maxLon}, latitud de ` +
+  `${COLOMBIA_BBOX.minLat} a ${COLOMBIA_BBOX.maxLat}). Cada posición es [longitud, latitud]: revisa que no estén invertidas.`;
+
+type ZoneRingPosition = readonly [number, number];
+
+const zoneRing = z
+  .array(z.tuple([z.number().finite(), z.number().finite()]))
+  .min(4, { error: "El anillo necesita al menos 4 posiciones (3 vértices más el cierre)." })
+  .max(ZONE_MAX_VERTICES + 1, { error: `El anillo admite a lo sumo ${ZONE_MAX_VERTICES} vértices (${ZONE_MAX_VERTICES + 1} posiciones con el cierre).` })
+  .refine(
+    (ring) => {
+      const first: ZoneRingPosition | undefined = ring[0];
+      const last: ZoneRingPosition | undefined = ring[ring.length - 1];
+      return first !== undefined && last !== undefined && first[0] === last[0] && first[1] === last[1];
+    },
+    { error: "El anillo debe estar cerrado: la última posición debe ser igual a la primera." },
+  )
+  .refine((ring) => new Set(ring.map(([x, y]) => `${x},${y}`)).size >= 3, { error: "El polígono necesita al menos 3 vértices distintos." })
+  .refine((ring) => ring.every(([x, y]) => isInsideBoundingBox(x, y, COLOMBIA_BBOX)), { error: ZONE_RING_BBOX_MESSAGE });
+
+function isInsideBoundingBox(lon: number, lat: number, area: BoundingBox): boolean {
+  return lon >= area.minLon && lon <= area.maxLon && lat >= area.minLat && lat <= area.maxLat;
+}
+
+/**
+ * Cuerpo de `POST /v1/zones` (alta). Desde v1. `name` se recorta y va de 1 a `ZONE_NAME_MAX_LENGTH` caracteres, sin caracteres de
+ * control ni bidi; `kind` es uno de `ZONE_KINDS`. `geometry` es un `Polygon` GeoJSON con UN solo anillo (sin huecos): lista cerrada
+ * (primera = última) de `[lng, lat]` (longitud primero), de 4 a `ZONE_MAX_VERTICES + 1` posiciones, con al menos 3 vértices distintos
+ * y todas dentro de `COLOMBIA_BBOX`. Que el polígono no se auto-intersecte lo decide PostGIS al guardar (`400 invalid_geometry`).
+ * Responde `201` con `zoneFeatureSchema`, `409 zone_name_taken` o `400`.
+ */
+export const zoneCreateRequestSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, { error: "El nombre de la zona no puede estar vacío." })
+    .max(ZONE_NAME_MAX_LENGTH, { error: `El nombre admite a lo sumo ${ZONE_NAME_MAX_LENGTH} caracteres.` })
+    .regex(ZONE_NAME_PATTERN, { error: "El nombre no admite caracteres de control ni de dirección de texto." })
+    .describe(`Nombre de la zona, único dentro del tenant; recortado, de 1 a ${ZONE_NAME_MAX_LENGTH} caracteres. Desde v1.`),
+  kind: z.enum(ZONE_KINDS).describe("`critical`, `depot` o `customer`. Desde v1."),
+  geometry: z
+    .object({
+      type: z.literal("Polygon"),
+      coordinates: z
+        .tuple([zoneRing], { error: "El polígono debe tener un solo anillo (sin huecos)." })
+        .describe("UN anillo exterior: lista cerrada de `[lng, lat]` (longitud primero), dentro de Colombia. Desde v1."),
+    })
+    .describe("Polígono GeoJSON de la zona, SRID 4326. Desde v1."),
+});
+export type ZoneCreateRequest = z.infer<typeof zoneCreateRequestSchema>;

@@ -75,6 +75,9 @@ const fleetApiConfig = z.object({
   // Alta de vehículos (POST /v1/vehicles): altas permitidas por usuario y ventana. Superado: 429 con Retry-After.
   FLEET_API_VEHICLE_CREATE_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000_000).default(30),
   FLEET_API_VEHICLE_CREATE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+  // Alta de zonas (POST /v1/zones): altas permitidas por usuario y ventana. Superado: 429 con Retry-After.
+  FLEET_API_ZONE_CREATE_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000_000).default(20),
+  FLEET_API_ZONE_CREATE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
   // Vida de un código de vinculación, en minutos.
   FLEET_API_PAIRING_CODE_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
 });
