@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { checkContractFixtures, findUnregisteredSchemas, withExtraFields, type ContractEntry } from "./harness.js";
+import {
+  checkContractFixtures,
+  findUnregisteredSchemas,
+  UnverifiableSchemaError,
+  withExtraFields,
+  type ContractEntry,
+  type ForwardFinding,
+} from "./harness.js";
 
 // Esquema local al test: el registro real está vacío hasta la fase 1 y el arnés no debe pasar en vacío.
 const pingV1 = { id: z.uuid(), at: z.iso.datetime() };
@@ -177,15 +184,80 @@ describe("withExtraFields (sigue el esquema)", () => {
     expect(original).toEqual({ a: { b: 1 }, list: [{ c: 2 }], maybe: { d: 3 }, nothing: null });
   });
 
-  it("no toca lo que en el esquema no es un objeto: record, uniones simples y arreglos de primitivos", () => {
+  it("no toca lo que en el esquema no es un objeto: record y arreglos de primitivos", () => {
     const schema = z.object({
       labels: z.record(z.string(), z.object({ n: z.number() })),
-      either: z.union([z.object({ x: z.number() }), z.string()]),
       tags: z.array(z.string()),
+      either: z.union([z.object({ x: z.number() }), z.string()]),
     });
-    const json = { labels: { a: { n: 1 } }, either: { x: 1 }, tags: ["t"] };
+    const json = { labels: { a: { n: 1 } }, tags: ["t"], either: "texto" };
 
     expect(withExtraFields(schema, json)).toEqual({ ...json, __fleetForwardCompat: true });
+  });
+
+  it("una unión simple, una intersección o un lazy con un objeto JSON no se pueden verificar: lanza", () => {
+    const union = z.object({ either: z.union([z.object({ x: z.number() }), z.string()]) });
+    const intersection = z.object({ both: z.intersection(z.object({ a: z.number() }), z.object({ b: z.number() })) });
+    const lazy = z.object({ node: z.lazy(() => z.object({ n: z.number() })) });
+
+    expect(() => withExtraFields(union, { either: { x: 1 } })).toThrow(UnverifiableSchemaError);
+    expect(() => withExtraFields(intersection, { both: { a: 1, b: 2 } })).toThrow(/intersection.*both/);
+    expect(() => withExtraFields(lazy, { node: { n: 1 } })).toThrow(/lazy.*node/);
+  });
+
+  it("con un callback, cada hallazgo se entrega con su ruta en vez de lanzar", () => {
+    const schema = z.object({ items: z.array(z.object({ either: z.union([z.object({ x: z.number() }), z.string()]) })) });
+    const findings: ForwardFinding[] = [];
+
+    withExtraFields(schema, { items: [{ either: { x: 1 } }] }, (finding) => findings.push(finding));
+
+    expect(findings).toEqual([{ path: "items.0.either", kind: "unverifiable", schemaType: "union" }]);
+  });
+
+  it("una unión simple con un valor que no es un objeto JSON no es un hallazgo", () => {
+    const schema = z.object({ either: z.union([z.object({ x: z.number() }), z.string()]) });
+
+    expect(withExtraFields(schema, { either: "texto" })).toEqual({ either: "texto", __fleetForwardCompat: true });
+  });
+
+  it.each([
+    ["default", z.strictObject({ n: z.number() }).default({ n: 0 }), z.object({ n: z.number() }).default({ n: 0 })],
+    ["prefault", z.strictObject({ n: z.number() }).prefault({ n: 0 }), z.object({ n: z.number() }).prefault({ n: 0 })],
+    ["readonly", z.strictObject({ n: z.number() }).readonly(), z.object({ n: z.number() }).readonly()],
+    ["nonoptional", z.strictObject({ n: z.number() }).optional().nonoptional(), z.object({ n: z.number() }).optional().nonoptional()],
+    ["transform", z.strictObject({ n: z.number() }).transform((v) => v), z.object({ n: z.number() }).transform((v) => v)],
+    ["preprocess", z.preprocess((v) => v, z.strictObject({ n: z.number() })), z.preprocess((v) => v, z.object({ n: z.number() }))],
+  ])("atraviesa .%s hasta el objeto interior", (_caso, strict, tolerant) => {
+    for (const wrapped of [strict, tolerant]) {
+      expect(withExtraFields(z.object({ meta: wrapped }), { meta: { n: 1 } })).toEqual({
+        meta: { n: 1, __fleetForwardCompat: true },
+        __fleetForwardCompat: true,
+      });
+    }
+  });
+
+  it("un pipe cuyo lado de entrada no es un transform sigue por la entrada", () => {
+    const decode = z.object({ meta: z.string().transform((value) => ({ n: value.length })).pipe(z.object({ n: z.number() })) });
+
+    expect(withExtraFields(decode, { meta: "texto" })).toEqual({ meta: "texto", __fleetForwardCompat: true });
+  });
+
+  it("con .catch() entrega un hallazgo si el esquema interior rechaza el campo extra (catch lo taparía)", () => {
+    const schema = z.object({ meta: z.strictObject({ n: z.number() }).catch({ n: -1 }) });
+    const findings: ForwardFinding[] = [];
+
+    withExtraFields(schema, { meta: { n: 1 } }, (finding) => findings.push(finding));
+
+    expect(findings).toEqual([{ path: "meta", kind: "swallowed", schemaType: "catch" }]);
+  });
+
+  it("con .catch() sobre un objeto tolerante no hay hallazgo", () => {
+    const schema = z.object({ meta: z.object({ n: z.number() }).catch({ n: -1 }) });
+    const findings: ForwardFinding[] = [];
+
+    withExtraFields(schema, { meta: { n: 1 } }, (finding) => findings.push(finding));
+
+    expect(findings).toEqual([]);
   });
 
   it("deja pasar las claves que el esquema no conoce y los valores que no coinciden con su forma", () => {
@@ -279,6 +351,121 @@ describe("compatibilidad hacia adelante guiada por el esquema", () => {
 
     expect((await checkContractFixtures([entry(strictEvent, [1])], dir))[0]?.reason).toMatch(/no tolera campos extra/);
     expect(await checkContractFixtures([entry(tolerantEvent, [1])], dir)).toEqual([]);
+  });
+});
+
+describe("compatibilidad hacia adelante a través de envoltorios de zod", () => {
+  const strictMeta = z.strictObject({ n: z.number() });
+  const tolerantMeta = z.object({ n: z.number() });
+  const fixture = { id: v1Fixture.id, meta: { n: 1 } };
+  const check = async (schema: z.ZodType) => {
+    await writeFixture("ping", "v1.json", fixture);
+    return checkContractFixtures([entry(schema, [1])], dir);
+  };
+
+  it.each([
+    ["default", (inner: z.ZodObject) => inner.default({ n: 0 })],
+    ["prefault", (inner: z.ZodObject) => inner.prefault({ n: 0 })],
+    ["readonly", (inner: z.ZodObject) => inner.readonly()],
+    ["catch", (inner: z.ZodObject) => inner.catch({ n: -1 })],
+    ["nonoptional", (inner: z.ZodObject) => inner.optional().nonoptional()],
+    ["transform", (inner: z.ZodObject) => inner.transform((value) => value)],
+    ["preprocess", (inner: z.ZodObject) => z.preprocess((value) => value, inner)],
+  ])("con .%s: un strictObject dentro falla y un object pasa", async (_caso, wrap) => {
+    const strict = await check(z.object({ id: z.uuid(), meta: wrap(strictMeta) }));
+    const tolerant = await check(z.object({ id: z.uuid(), meta: wrap(tolerantMeta) }));
+
+    expect(strict).toHaveLength(1);
+    expect(strict[0]?.reason).toMatch(/meta/);
+    expect(tolerant).toEqual([]);
+  });
+
+  it.each([
+    ["transform", (inner: z.ZodObject) => inner.transform((value) => value)],
+    ["preprocess", (inner: z.ZodObject) => z.preprocess((value) => value, inner)],
+    ["default", (inner: z.ZodObject) => inner.default({ id: v1Fixture.id, meta: { n: 0 } })],
+    ["readonly", (inner: z.ZodObject) => inner.readonly()],
+  ])("con .%s en la raíz del contrato: un strictObject falla y un object pasa", async (_caso, wrap) => {
+    await writeFixture("ping", "v1.json", fixture);
+    const strict = await checkContractFixtures([entry(wrap(z.strictObject({ id: z.uuid(), meta: tolerantMeta })), [1])], dir);
+    const tolerant = await checkContractFixtures([entry(wrap(z.object({ id: z.uuid(), meta: tolerantMeta })), [1])], dir);
+
+    expect(strict[0]?.reason).toMatch(/no tolera campos extra/);
+    expect(tolerant).toEqual([]);
+  });
+
+  it("con .catch() el motivo explica que el catch taparía el rechazo", async () => {
+    const problems = await check(z.object({ id: z.uuid(), meta: strictMeta.catch({ n: -1 }) }));
+
+    expect(problems[0]?.reason).toMatch(/catch.*meta/);
+  });
+
+  describe("fallar en cerrado: lo que el arnés no sabe recorrer", () => {
+    const union = z.object({ id: z.uuid(), meta: z.union([tolerantMeta, z.string()]) });
+
+    it("una unión simple con un objeto JSON se reporta como no verificable", async () => {
+      const problems = await check(union);
+
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toMatchObject({ contract: "ping", file: "ping/v1.json" });
+      expect(problems[0]?.reason).toMatch(/no verificable hacia adelante.*union.*meta.*forwardCompatExemption/s);
+    });
+
+    it("una intersección y un lazy también", async () => {
+      const intersection = z.object({ id: z.uuid(), meta: z.intersection(tolerantMeta, z.object({})) });
+      const lazy = z.object({ id: z.uuid(), meta: z.lazy(() => tolerantMeta) });
+
+      expect((await check(intersection))[0]?.reason).toMatch(/no verificable.*intersection/s);
+      expect((await check(lazy))[0]?.reason).toMatch(/no verificable.*lazy/s);
+    });
+
+    it("con una exención explícita y con motivo, el mismo contrato pasa", async () => {
+      await writeFixture("ping", "v1.json", fixture);
+
+      const problems = await checkContractFixtures(
+        [{ ...entry(union, [1]), forwardCompatExemption: { reason: "meta es una unión cerrada que no recibe campos nuevos" } }],
+        dir,
+      );
+
+      expect(problems).toEqual([]);
+    });
+
+    it("una exención sin motivo (vacío o solo espacios) es un error del registro", async () => {
+      await writeFixture("ping", "v1.json", fixture);
+
+      const empty = await checkContractFixtures([{ ...entry(union, [1]), forwardCompatExemption: { reason: "" } }], dir);
+      const blank = await checkContractFixtures([{ ...entry(union, [1]), forwardCompatExemption: { reason: "   " } }], dir);
+
+      for (const problems of [empty, blank]) {
+        expect(problems[0]?.file).toBe("(registro)");
+        expect(problems[0]?.reason).toMatch(/exención.*motivo/);
+      }
+    });
+
+    it("la exención no tapa un strictObject que sí se puede verificar", async () => {
+      await writeFixture("ping", "v1.json", fixture);
+      const schema = z.object({ id: z.uuid(), meta: strictMeta, other: z.union([tolerantMeta, z.string()]).optional() });
+
+      const problems = await checkContractFixtures([{ ...entry(schema, [1]), forwardCompatExemption: { reason: "other es una unión" } }], dir);
+
+      expect(problems[0]?.reason).toMatch(/no tolera campos extra.*meta/);
+    });
+
+    it("una unión simple solo de primitivos no necesita exención", async () => {
+      await writeFixture("ping", "v1.json", { id: v1Fixture.id, meta: "texto" });
+
+      expect(await checkContractFixtures([entry(z.object({ id: z.uuid(), meta: z.union([z.string(), z.number()]) }), [1])], dir)).toEqual([]);
+    });
+
+    it("z.discriminatedUnion sigue verificándose sin exención", async () => {
+      await writeFixture("ping", "v1.json", { kind: "alert", id: "a-1" });
+      const event = z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("alert"), id: z.string() }),
+        z.object({ kind: z.literal("heartbeat") }),
+      ]);
+
+      expect(await checkContractFixtures([entry(event, [1])], dir)).toEqual([]);
+    });
   });
 });
 

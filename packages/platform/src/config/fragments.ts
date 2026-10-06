@@ -51,3 +51,11 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 export const logConfig = z.object({
   LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
 });
+
+/**
+ * Tope del apagado ordenado de los servicios (ver `installGracefulShutdown`), en ms (1000-120000). Por defecto 15 s.
+ * Debe ser menor que el `stop_grace_period` / `terminationGracePeriod` del orquestador, o este mata al proceso antes.
+ */
+export const shutdownConfig = z.object({
+  SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(15_000),
+});

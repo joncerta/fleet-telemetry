@@ -2,6 +2,7 @@ import { Client } from "pg";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { MigrationError, type MigrationFile } from "./files.js";
+import { assertNoConnectionOptions } from "./local-guard.js";
 
 /**
  * Clave del `pg_advisory_lock` del runner. Los advisory locks son por base de datos, así que dos corridas sobre
@@ -64,6 +65,8 @@ export async function withMigrationClient<T>(
   run: (client: Client) => Promise<T>,
   { readOnly = false, timeouts = DEFAULT_SESSION_TIMEOUTS }: ClientOptions = {},
 ): Promise<T> {
+  // `pg` deja que los parámetros de la URL pisen la configuración explícita: un `?options=` reemplazaría los de abajo.
+  assertNoConnectionOptions(adminUrl);
   const { lockTimeoutMs, idleInTransactionTimeoutMs } = resolveSessionTimeouts(timeouts);
   const settings = [
     "-c timezone=UTC",

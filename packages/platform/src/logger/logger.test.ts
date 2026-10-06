@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLogger, MAX_REDACTION_DEPTH, REDACTED, TRUNCATED, withContext } from "./logger.js";
+import { createLogger, MAX_REDACTION_DEPTH, REDACTED, redactDeep, serializeError, TRUNCATED, withContext } from "./logger.js";
 
 function setup(level: "debug" | "info" = "info") {
   const lines: string[] = [];
@@ -294,5 +294,102 @@ describe("serializador de errores sin el detail de pg (regla 14)", () => {
     const [first, second] = entries();
     expect(first?.err).toBe("texto");
     expect(second?.err).toEqual({ code: "x" });
+  });
+
+  it.each([
+    ["bajo una clave cualquiera", (e: Error) => ({ reason: e })],
+    ["dentro de un arreglo", (e: Error) => ({ failures: [e] })],
+    ["anidado bajo `err`", (e: Error) => ({ ctx: { err: e } })],
+    ["anidado bajo otra clave", (e: Error) => ({ ctx: { inner: { cause: e } } })],
+    ["en un arreglo de objetos", (e: Error) => ({ rejected: [{ eventId: "e-1", reason: e }] })],
+  ])("un Error %s no filtra detail, where, internalQuery ni hint", (_caso, build) => {
+    const lines: string[] = [];
+    const logger = createLogger({ service: "s", destination: { write: (line) => void lines.push(line) } });
+
+    logger.warn({ eventId: "e-1", ...build(pgError()) }, "a la DLQ");
+
+    const raw = lines.join("");
+    expect(raw).not.toMatch(/4\.711|-74\.07/);
+    expect(raw).toContain("points_lat_check");
+    expect(raw).toContain("new row violates check constraint");
+  });
+
+  it("serializa igual un Error bajo `reason` que bajo `err` (idempotente con el serializador de err)", () => {
+    const { logger, entries } = setup();
+    const error = pgError();
+
+    logger.warn({ reason: error, err: error }, "x");
+
+    const [entry] = entries();
+    expect(entry?.reason).toEqual(entry?.err);
+  });
+
+  it("serializeError aplicado dos veces da lo mismo que una", () => {
+    const once = serializeError(pgError());
+
+    expect(serializeError(once)).toEqual(once);
+  });
+
+  it("redactDeep limpia un Error a cualquier profundidad", () => {
+    const result = JSON.stringify(redactDeep({ a: [{ b: { c: pgError() } }] }));
+
+    expect(result).not.toMatch(/4\.711|-74\.07/);
+  });
+});
+
+describe("objetos que no son planos (URL, Buffer, Headers)", () => {
+  it("un URL se escribe como origen y ruta, sin la query (que puede traer la posición)", () => {
+    const lines: string[] = [];
+    const logger = createLogger({ service: "s", destination: { write: (line) => void lines.push(line) } });
+
+    logger.info({ target: new URL("http://fleet-api:4002/v1/vehicles?lat=4.711&lng=-74.072") }, "llamada");
+
+    const raw = lines.join("");
+    expect(raw).not.toMatch(/4\.711|74\.072|lat=/);
+    expect(JSON.parse(raw)).toMatchObject({ target: "http://fleet-api:4002/v1/vehicles" });
+  });
+
+  it("un URL con credenciales no las escribe", () => {
+    const lines: string[] = [];
+    const logger = createLogger({ service: "s", destination: { write: (line) => void lines.push(line) } });
+
+    logger.info({ target: new URL("http://user:S3CRET@fleet-api:4002/v1#frag") }, "llamada");
+
+    expect(lines.join("")).not.toMatch(/S3CRET|user|frag/);
+  });
+
+  it("un URL anidado en un objeto y en un arreglo también", () => {
+    const lines: string[] = [];
+    const logger = createLogger({ service: "s", destination: { write: (line) => void lines.push(line) } });
+
+    logger.info({ ctx: { urls: [new URL("http://a:1/p?lat=4.711")] } }, "x");
+
+    expect(lines.join("")).not.toContain("4.711");
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({ ctx: { urls: ["http://a:1/p"] } });
+  });
+
+  it("un Buffer y un Uint8Array se escriben como [binary N bytes], no su contenido", () => {
+    const { logger, entries } = setup();
+
+    logger.info({ raw: Buffer.from("lat=4.711"), view: new Uint8Array(3), data: new DataView(new ArrayBuffer(5)) }, "x");
+
+    expect(entries()[0]).toMatchObject({ raw: "[binary 9 bytes]", view: "[binary 3 bytes]", data: "[binary 5 bytes]" });
+  });
+
+  it("un ArrayBuffer también", () => {
+    const { logger, entries } = setup();
+
+    logger.info({ buffer: new ArrayBuffer(4) }, "x");
+
+    expect(entries()[0]).toMatchObject({ buffer: "[binary 4 bytes]" });
+  });
+
+  it("un Headers de undici no rompe el log ni escribe su contenido", () => {
+    const lines: string[] = [];
+    const logger = createLogger({ service: "s", destination: { write: (line) => void lines.push(line) } });
+
+    logger.info({ headers: new Headers({ "x-trace": "abc" }) }, "x");
+
+    expect(lines.join("")).not.toContain("unable to serialize");
   });
 });

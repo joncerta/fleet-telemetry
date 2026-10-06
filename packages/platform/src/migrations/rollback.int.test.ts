@@ -690,7 +690,10 @@ describe("guarda de roles del down de la 001", () => {
 
     const result = await back(defaultMigrationsDir, { to: 0 });
 
-    expect(result.reverted).toEqual([{ version: 1, name: "extensions_and_roles" }]);
+    // Todas las reales, de la más reciente a la 001 (el conjunto crece con cada fase).
+    const files = await loadMigrationFiles(defaultMigrationsDir);
+    expect(result.reverted).toEqual([...files].reverse().map((file) => ({ version: file.version, name: file.name })));
+    expect(result.reverted.at(-1)).toEqual({ version: 1, name: "extensions_and_roles" });
     expect(await query("SELECT rolname FROM pg_roles WHERE rolname IN ('fleet_app', 'fleet_ro') ORDER BY rolname")).toEqual([
       { rolname: "fleet_app" },
       { rolname: "fleet_ro" },

@@ -67,9 +67,14 @@ const IMPURE_GLOBALS = [
 
 const CLOCK_MESSAGE =
   "domain/ no lee el reloj ni genera aleatoriedad: el tiempo y la aleatoriedad entran por puertos (por ejemplo un Clock " +
-  "definido en application/) o como argumentos. `Date` como tipo y `new Date(valor)` sí se permiten.";
+  "definido en application/) o como argumentos. `Date` como tipo y `new Date(valor)` sí se permiten, pero no guardar `Date` o `Math` en una variable.";
 
-/** Reloj y entropía accedidos sin pasar por un global prohibido: `new Date()`, `Date()`, `Date.now` y `Math.random`. */
+/**
+ * Reloj y entropía accedidos sin pasar por un global prohibido: `new Date()`, `Date()`, `Date.now` y `Math.random`,
+ * y sus alias: guardar `Date` o `Math` en una variable (`const D = Date`, `const { now } = Date`,
+ * `const { random } = Math`, `x = Date`) y construir con `Reflect.construct(Date, ...)`.
+ * `Date` y `Math` solo se usan en el sitio de llamada: `new Date(valor)`, `Date.parse(...)`, `Math.max(...)`.
+ */
 const CLOCK_AND_ENTROPY_SELECTORS = [
   "NewExpression[callee.name='Date'][arguments.length=0]",
   "CallExpression[callee.name='Date']",
@@ -77,6 +82,9 @@ const CLOCK_AND_ENTROPY_SELECTORS = [
   "MemberExpression[object.name='Date'][property.value='now']",
   "MemberExpression[object.name='Math'][property.name='random']",
   "MemberExpression[object.name='Math'][property.value='random']",
+  "VariableDeclarator[init.type='Identifier'][init.name=/^(Date|Math)$/]",
+  "AssignmentExpression[right.type='Identifier'][right.name=/^(Date|Math)$/]",
+  "CallExpression[callee.object.name='Reflect'][callee.property.name='construct'][arguments.0.name='Date']",
 ];
 
 const OUTSIDE_DOMAIN_MESSAGE =

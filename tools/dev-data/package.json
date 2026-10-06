@@ -1,0 +1,27 @@
+{
+  "name": "@fleet/dev-data",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Comandos solo para local: pnpm db:seed (datos de demo) y pnpm device:token (tokens de dispositivo).",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@fleet/contracts": "workspace:*",
+    "@fleet/platform": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@fleet/eslint-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "eslint": "catalog:",
+    "pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

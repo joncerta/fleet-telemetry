@@ -1,0 +1,32 @@
+{
+  "name": "@fleet/processor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Consume telemetry.raw -> persiste idempotente -> actualiza vehicle_state -> produce vehicle.state y fleet.alerts.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "node dist/main.js",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@fleet/contracts": "workspace:*",
+    "@fleet/platform": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@fleet/eslint-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "eslint": "catalog:",
+    "kafkajs": "catalog:",
+    "pg": "catalog:",
+    "tsx": "^4.23.15",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,3 +1,5 @@
-// Los esquemas de dominio (telemetría, ACK, estado, SSE...) llegan en la fase 1 con `/add-contract`.
+// Los esquemas de dominio llegan con `/add-contract`.
 // Cada esquema nuevo se registra en `compat/registry.ts` junto con su fixture `fixtures/<esquema>/v<N>.json`.
-export {};
+export * from "./telemetry.js";
+export * from "./health.js";
+export * from "./topics.js";

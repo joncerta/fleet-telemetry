@@ -129,6 +129,12 @@ export function serializeError(err: unknown): unknown {
   return err;
 }
 
+/** Destino de una URL sin lo que puede ser personal: credenciales, query (`?lat=...`) y fragmento. */
+const describeUrl = (url: URL): string => `${url.protocol}//${url.host}${url.pathname}`;
+
+const isBinary = (value: unknown): value is ArrayBufferView | ArrayBuffer | SharedArrayBuffer =>
+  ArrayBuffer.isView(value) || value instanceof ArrayBuffer || value instanceof SharedArrayBuffer;
+
 function redactEntries(object: object, depth: number): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(object)) {
@@ -141,11 +147,17 @@ function redactEntries(object: object, depth: number): Record<string, unknown> {
  * Copia `value` reemplazando por `[REDACTED]` el valor de toda clave de `REDACTED_KEYS`, a cualquier profundidad
  * hasta `MAX_REDACTION_DEPTH` y atravesando arreglos (`{ batch: { points: [{ lat, lon }] } }`). Más abajo de ese
  * límite el subárbol se sustituye por `[TRUNCATED]`: es preferible perder detalle a filtrar un dato personal.
- * Solo recorre objetos planos y arreglos; `Error`, `Date`, `Map`... pasan tal cual a sus serializadores.
+ * Recorre objetos planos y arreglos. Normaliza lo que `JSON.stringify` o pino no saben escribir sin filtrar o sin romperse:
+ * - todo `Error`, bajo cualquier clave y a cualquier profundidad, pasa por `serializeError` (un `DatabaseError` de `pg`
+ *   trae la fila en `detail`); es idempotente con `serializers.err`;
+ * - un `URL` se escribe como `protocolo//host/ruta`, sin credenciales, query ni fragmento (la query puede traer la posición);
+ * - un `ArrayBuffer`, `SharedArrayBuffer` o vista (`Buffer`, `Uint8Array`, `DataView`) se escribe como `[binary N bytes]`.
+ * Los demás objetos (`Date`, `Map`...) pasan tal cual a pino.
  *
  * **Lo que NO cubre** (la redacción es la última red de seguridad, no un permiso para loguear datos):
  * - claves con otro nombre (`gpsLat`, `fix.y`, `nombre`, `vin`...);
- * - objetos que no son planos ni arreglos (instancias de clase, `Map`, `Set`) y las propiedades de un `Error`;
+ * - objetos que no son planos ni arreglos y no se normalizan arriba (instancias de clase, `Map`, `Set`, `Headers`) y las
+ *   propiedades de un `Error` que no sean las cuatro que quita `serializeError`;
  * - los mismos datos dentro de un texto: el `message`, un `err.message`, una URL o un `JSON.stringify`;
  * - cualquier dato personal que no esté bajo una clave de `REDACTED_KEYS` (por ejemplo, un WKT dentro de un campo `value`);
  * - las propiedades de `logger.child({...})`: `formatters.log` no las ve. Las cubre solo la segunda red,
@@ -156,6 +168,9 @@ function redactEntries(object: object, depth: number): Record<string, unknown> {
  * La regla de fondo sigue siendo no loguear payloads de telemetría ni objetos de conductor.
  */
 export function redactDeep(value: unknown, depth = 0): unknown {
+  if (value instanceof Error) return serializeError(value);
+  if (value instanceof URL) return describeUrl(value);
+  if (isBinary(value)) return `[binary ${value.byteLength} bytes]`;
   if (Array.isArray(value)) {
     if (depth >= MAX_REDACTION_DEPTH) return TRUNCATED;
     return value.map((item: unknown) => redactDeep(item, depth + 1));

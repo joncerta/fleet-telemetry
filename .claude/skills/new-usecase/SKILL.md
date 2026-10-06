@@ -43,7 +43,7 @@ Ningún paso se salta en silencio. Si uno no aplica, márcalo como **"no aplica:
    - **SQL**: parametrizado; filtro por tenant; rango de tiempo en hypertables; `LIMIT` y paginación por keyset en listados; transacción si hay varias escrituras relacionadas; `ST_MakePoint(lon, lat)`.
    - **HTTP a otro servicio**: cliente con circuit breaker a nivel de módulo, siguiendo `services/agent/src/infrastructure/resilient-fleet-client.ts`.
    - **Test de integración** del adaptador contra TimescaleDB/PostGIS o Redpanda reales, con el mecanismo que defina CLAUDE.md.
-7. **Migración**, si se persiste algo nuevo: un par nuevo `NNN_<nombre>.sql` + `NNN_<nombre>.down.sql` en `infra/db/migrations/`, con el siguiente número libre. Nunca edites uno existente. El test de ida y vuelta del runner prueba el down automáticamente.
+7. **Migración**, si se persiste algo nuevo: un par nuevo `NNN_<nombre>.sql` + `NNN_<nombre>.down.sql` en `infra/db/migrations/`, con el siguiente número libre. Nunca edites uno que ya esté en `develop` o se haya aplicado en un entorno compartido. El test de ida y vuelta del runner compara el esquema contra un baseline y detecta un down incompleto (lo que cubre está en ADR-003). Las reglas de negocio de la migración, como constraints o defaults con significado, llevan además su propio test.
 8. **Wiring** en `main.ts`.
 9. **Entrada** en `interfaces/`. Solo valida, llama al caso de uso y mapea; sin lógica de negocio:
    - **HTTP (Fastify)**: schema zod de request y de respuesta en la ruta; `tenantId` desde la auth; errores de dominio traducidos a códigos HTTP sin filtrar detalles internos.

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLogger } from "../logger/logger.js";
 import { integrationConfig as config } from "../testing/integration-support.js";
 import { createTempDatabase, type TempDatabase } from "../testing/temp-database.js";
-import { checksumOf, MigrationError } from "./files.js";
+import { checksumOf, loadMigrationFiles, MigrationError } from "./files.js";
 import { defaultMigrationsDir, migrate } from "./runner.js";
 
 const logger = createLogger({ service: "runner-it", level: "error" });
@@ -54,31 +54,35 @@ const writePair = async (base: string, up: string, down: string) => {
 };
 
 describe("migrate con las migraciones reales", () => {
-  it("aplica 001 y en la segunda corrida no hace nada", async () => {
+  it("aplica todas las migraciones reales (la 001 primero) y en la segunda corrida no hace nada", async () => {
+    // El conjunto crece con cada fase: se compara contra los archivos del directorio, no contra un número fijo.
+    const files = await loadMigrationFiles(defaultMigrationsDir);
+    expect(files[0]).toMatchObject({ version: 1, name: "extensions_and_roles" });
+
     const first = await run(defaultMigrationsDir, true);
 
-    expect(first.applied).toEqual([{ version: 1, name: "extensions_and_roles" }]);
+    expect(first.applied).toEqual(files.map((file) => ({ version: file.version, name: file.name })));
     expect(first.alreadyApplied).toBe(0);
 
     const extensions = await query<{ extname: string }>("SELECT extname FROM pg_extension");
     expect(extensions.map((e) => e.extname)).toEqual(expect.arrayContaining(["timescaledb", "postgis"]));
 
     const before = await query<{ version: number; name: string; checksum: string; applied_at: Date }>(
-      "SELECT * FROM schema_migrations",
+      "SELECT * FROM schema_migrations ORDER BY version",
     );
     const sql = await readFile(join(defaultMigrationsDir, REAL_001), "utf8");
     const downSql = await readFile(join(defaultMigrationsDir, REAL_001_DOWN), "utf8");
-    expect(before).toHaveLength(1);
+    expect(before).toHaveLength(files.length);
     expect(before[0]).toMatchObject({ version: 1, name: "extensions_and_roles", checksum: checksumOf(sql), down_checksum: checksumOf(downSql) });
     expect(before[0]?.applied_at).toBeInstanceOf(Date);
 
     const second = await run(defaultMigrationsDir, true);
 
     expect(second.applied).toEqual([]);
-    expect(second.alreadyApplied).toBe(1);
-    const after = await query<{ version: number; applied_at: Date }>("SELECT version, applied_at FROM schema_migrations");
-    expect(after).toHaveLength(1);
-    expect(after[0]?.applied_at).toEqual(before[0]?.applied_at);
+    expect(second.alreadyApplied).toBe(files.length);
+    const after = await query<{ version: number; applied_at: Date }>("SELECT version, applied_at FROM schema_migrations ORDER BY version");
+    expect(after).toHaveLength(files.length);
+    expect(after.map((row) => row.applied_at)).toEqual(before.map((row) => row.applied_at));
   });
 
   it("da login a fleet_app y fleet_ro con las contraseñas configuradas", async () => {
