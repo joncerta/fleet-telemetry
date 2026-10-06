@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { apiErrorSchema, healthResponseSchema } from "@fleet/contracts";
+import { apiErrorSchema, healthResponseSchema, livenessResponseSchema, TOPICS } from "@fleet/contracts";
 import { createAdmin, createKafka, createLogger, loadConfig } from "@fleet/platform";
-import type { Admin } from "kafkajs";
+import { AssignerProtocol, type Admin } from "kafkajs";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { z } from "zod";
 import { processorIsConsuming } from "./harness.js";
@@ -16,6 +16,7 @@ import { e2eConfigSchema } from "./support.js";
 const gatewayUrl = inject("gatewayUrl");
 const fleetApiUrl = inject("fleetApiUrl");
 const processorGroup = inject("processorGroup");
+const runId = inject("runId");
 const rawBacklogEnd = inject("rawBacklogEnd");
 const logDir = inject("serviceLogDir");
 const config = loadConfig(e2eConfigSchema);
@@ -50,6 +51,13 @@ describe("ingest-gateway levantado desde dist/", () => {
     expect(JSON.stringify(health)).not.toMatch(/postgres|127\.0\.0\.1|password|fleet_app/i);
   });
 
+  it("GET /health/live responde 200 { status: ok } sin consultar dependencias", async () => {
+    const response = await fetch(`${gatewayUrl}/health/live`);
+
+    expect(response.status).toBe(200);
+    expect(livenessResponseSchema.parse(await response.json())).toEqual({ status: "ok" });
+  });
+
   it("una ruta inexistente responde 404 con el formato de apiErrorSchema y devuelve el correlationId recibido", async () => {
     const correlationId = `e2e-${randomUUID()}`;
 
@@ -72,13 +80,35 @@ describe("fleet-api levantado desde dist/", () => {
     expect(new URL(fleetApiUrl).port).toBe("14002");
   });
 
-  it("GET /health responde 200 con la base arriba, sin datos sensibles", async () => {
+  it("GET /health responde 200 con la base y el consumer del SSE arriba, sin datos sensibles", async () => {
     const response = await fetch(`${fleetApiUrl}/health`);
 
     expect(response.status).toBe(200);
     const health = healthResponseSchema.parse(await response.json());
-    expect(health).toEqual({ status: "ok", checks: { database: "up" } });
+    expect(health).toEqual({ status: "ok", checks: { database: "up", "sse-feed": "up" } });
     expect(JSON.stringify(health)).not.toMatch(/postgres|127\.0\.0\.1|password|fleet_app|secret/i);
+  });
+
+  it("GET /health/live responde 200 { status: ok } sin consultar dependencias", async () => {
+    const response = await fetch(`${fleetApiUrl}/health/live`);
+
+    expect(response.status).toBe(200);
+    expect(livenessResponseSchema.parse(await response.json())).toEqual({ status: "ok" });
+  });
+
+  it("su consumer del SSE tiene un grupo PROPIO (fleet-api-sse-<instancia>, distinto del processor), estable y con las particiones de vehicle.state y fleet.alerts", async () => {
+    const groupId = `fleet-api-sse-e2e-${runId}`;
+
+    const { groups } = await admin.describeGroups([groupId]);
+
+    const group = groups.find((candidate) => candidate.groupId === groupId);
+    expect(group?.state).toBe("Stable");
+    expect(group?.members).toHaveLength(1);
+    const member = group?.members[0];
+    const assignment = member === undefined ? undefined : AssignerProtocol.MemberAssignment.decode(member.memberAssignment)?.assignment;
+    expect(assignment?.[TOPICS.vehicleState]?.length ?? 0).toBeGreaterThan(0);
+    expect(assignment?.[TOPICS.fleetAlerts]?.length ?? 0).toBeGreaterThan(0);
+    expect(groupId).not.toBe(processorGroup);
   });
 
   it("una ruta inexistente responde 404 con apiErrorSchema y devuelve el correlationId recibido", async () => {

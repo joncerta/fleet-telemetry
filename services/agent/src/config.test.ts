@@ -19,6 +19,8 @@ describe("loadAgentConfig", () => {
       AGENT_BREAKER_ERROR_THRESHOLD_PERCENTAGE: 50,
       AGENT_BREAKER_VOLUME_THRESHOLD: 5,
       AGENT_BREAKER_RESET_TIMEOUT_MS: 15_000,
+      AGENT_MODEL_TIMEOUT_MS: 20_000,
+      AGENT_MODEL_MAX_CONCURRENCY: 4,
     });
     expect(DEFAULT_AGENT_MODEL).toBe("claude-sonnet-5-5");
   });
@@ -29,6 +31,24 @@ describe("loadAgentConfig", () => {
     expect(() => loadAgentConfig({ ANTHROPIC_API_KEY: "k" })).toThrow(/SESSION_SECRET/);
     expect(() => loadAgentConfig({ ...valid, SESSION_SECRET: short })).toThrow(/SESSION_SECRET/);
     expect(() => loadAgentConfig({ ...valid, SESSION_SECRET: short })).not.toThrow(new RegExp(short));
+  });
+
+  it("valida el timeout por llamada y la concurrencia del modelo", () => {
+    expect(() => loadAgentConfig({ ...valid, AGENT_MODEL_TIMEOUT_MS: "10" })).toThrow(/AGENT_MODEL_TIMEOUT_MS/);
+    expect(() => loadAgentConfig({ ...valid, AGENT_MODEL_MAX_CONCURRENCY: "0" })).toThrow(/AGENT_MODEL_MAX_CONCURRENCY/);
+    expect(loadAgentConfig({ ...valid, AGENT_MODEL_TIMEOUT_MS: "5000", AGENT_MODEL_MAX_CONCURRENCY: "2" })).toMatchObject({
+      AGENT_MODEL_TIMEOUT_MS: 5_000,
+      AGENT_MODEL_MAX_CONCURRENCY: 2,
+    });
+  });
+
+  it("una llamada al modelo (reintentos y backoff incluidos) debe caber en el tiempo total de la pregunta", () => {
+    // 20000 × 2 + 5000 = 45000 < 60000 (los valores por defecto): válido.
+    expect(() => loadAgentConfig({ ...valid, AGENT_MODEL_TIMEOUT_MS: "20000", AGENT_TIMEOUT_MS: "60000" })).not.toThrow();
+    // 30000 × 2 + 5000 = 65000 >= 60000.
+    expect(() => loadAgentConfig({ ...valid, AGENT_MODEL_TIMEOUT_MS: "30000", AGENT_TIMEOUT_MS: "60000" })).toThrow(/AGENT_MODEL_TIMEOUT_MS/);
+    // En el límite exacto también falla (debe ser estrictamente menor).
+    expect(() => loadAgentConfig({ ...valid, AGENT_MODEL_TIMEOUT_MS: "20000", AGENT_TIMEOUT_MS: "45000" })).toThrow(/AGENT_MODEL_TIMEOUT_MS/);
   });
 
   describe("ANTHROPIC_API_KEY", () => {

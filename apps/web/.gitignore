@@ -1,0 +1,7 @@
+# Build del e2e (compilado con la URL de la API del e2e) y tipos que genera Next.
+.next-e2e/
+next-env.d.ts
+# Worker de MapLibre copiado de node_modules al compilar (scripts/copy-maplibre-worker.mjs).
+public/vendor/
+# Logs de los servicios que levanta el e2e de Playwright.
+e2e/.logs/

@@ -1,0 +1,29 @@
+# Fastlane del conductor. UNA sola lane de publicación y solo hacia el track INTERNO de Google Play.
+# La promoción a producción (o a cualquier otro track) es manual, desde la consola de Play: aquí no existe y no debe agregarse.
+#
+# Credenciales: la cuenta de servicio de Play llega por la variable de entorno SUPPLY_JSON_KEY_DATA (secreto de GitHub
+# PLAY_SERVICE_ACCOUNT_JSON, expuesto solo en el job con aprobación). Nunca se escribe a disco ni vive en el repo.
+# El AAB lo genera EAS (perfil `production`); la ruta llega en ANDROID_AAB_PATH.
+
+default_platform(:android)
+
+platform :android do
+  desc "Sube el AAB de EAS al track interno de Google Play (sin promover a produccion)"
+  lane :internal do
+    aab = ENV.fetch("ANDROID_AAB_PATH") { UI.user_error!("Falta ANDROID_AAB_PATH (ruta del AAB descargado de EAS)") }
+    UI.user_error!("No existe el AAB: #{aab}") unless File.file?(aab)
+    UI.user_error!("Falta SUPPLY_JSON_KEY_DATA (cuenta de servicio de Play)") if ENV.fetch("SUPPLY_JSON_KEY_DATA", "").empty?
+
+    upload_to_play_store(
+      track: "internal",
+      aab: aab,
+      # `draft`: la versión queda en borrador y un humano la revisa y libera en la consola. Nunca `completed` sin revisión.
+      release_status: "draft",
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true,
+      validate_only: ENV["FASTLANE_VALIDATE_ONLY"] == "true"
+    )
+  end
+end

@@ -16,6 +16,13 @@ describe("loadFleetApiConfig", () => {
       FLEET_API_CORS_ORIGINS: ["http://localhost:3000"],
       FLEET_API_COOKIE_SECURE: false,
       SSE_HEARTBEAT_MS: 15_000,
+      SSE_MAX_STREAMS_PER_USER: 5,
+      SSE_MAX_PENDING_BYTES: 4_194_304,
+      SSE_RETRY_MS: 3_000,
+      SSE_RETRY_JITTER_MS: 5_000,
+      SSE_RATE_LIMIT_MAX: 30,
+      SSE_RATE_LIMIT_WINDOW_MS: 60_000,
+      SSE_SNAPSHOT_POOL_MAX: 3,
       FLEET_API_TRUSTED_PROXY_HOPS: 0,
       FLEET_API_LOGIN_FAILURE_LIMIT_MAX: 10,
       FLEET_API_PAIR_FAILURE_LIMIT_MAX: 10,
@@ -49,6 +56,24 @@ describe("loadFleetApiConfig", () => {
 
     it.each(["30001", "120000", "999", "0", "-1", "rapido", "15000.5"])("rechaza %s", (value) => {
       expect(() => loadFleetApiConfig({ ...valid, SSE_HEARTBEAT_MS: value })).toThrow(/SSE_HEARTBEAT_MS/);
+    });
+  });
+
+  describe("FLEET_API_INSTANCE_ID", () => {
+    it("por defecto es un uuid distinto en cada carga (un grupo propio por proceso)", () => {
+      const first = loadFleetApiConfig(valid).FLEET_API_INSTANCE_ID;
+      const second = loadFleetApiConfig(valid).FLEET_API_INSTANCE_ID;
+
+      expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(second).not.toBe(first);
+    });
+
+    it("acepta un valor explícito (el nombre del pod, por ejemplo)", () => {
+      expect(loadFleetApiConfig({ ...valid, FLEET_API_INSTANCE_ID: "fleet-api-0.prod" }).FLEET_API_INSTANCE_ID).toBe("fleet-api-0.prod");
+    });
+
+    it.each(["", "con espacio", "a/b", "a".repeat(65), "ñandú"])("rechaza %j (forma el nombre de un grupo de Kafka)", (value) => {
+      expect(() => loadFleetApiConfig({ ...valid, FLEET_API_INSTANCE_ID: value })).toThrow(/FLEET_API_INSTANCE_ID/);
     });
   });
 
@@ -89,6 +114,16 @@ describe("loadFleetApiConfig", () => {
     ["FLEET_API_PAIR_FAILURE_LIMIT_MAX", "0"],
     ["FLEET_API_PAIRING_CODE_TTL_MINUTES", "0"],
     ["FLEET_API_PAIRING_CODE_TTL_MINUTES", "61"],
+    ["SSE_MAX_STREAMS_PER_USER", "0"],
+    ["SSE_MAX_STREAMS_PER_USER", "101"],
+    ["SSE_MAX_PENDING_BYTES", "65535"],
+    ["SSE_MAX_PENDING_BYTES", "67108865"],
+    ["SSE_RETRY_MS", "999"],
+    ["SSE_RETRY_JITTER_MS", "-1"],
+    ["SSE_RATE_LIMIT_MAX", "0"],
+    ["SSE_RATE_LIMIT_WINDOW_MS", "999"],
+    ["SSE_SNAPSHOT_POOL_MAX", "0"],
+    ["SSE_SNAPSHOT_POOL_MAX", "21"],
   ])("rechaza %s=%s nombrando la variable", (name, value) => {
     expect(() => loadFleetApiConfig({ ...valid, [name]: value })).toThrow(new RegExp(name));
   });

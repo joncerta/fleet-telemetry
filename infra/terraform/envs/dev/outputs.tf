@@ -23,9 +23,9 @@ output "database_instance_id" {
   value       = module.timescaledb.instance_id
 }
 
-output "database_secret_arn" {
-  description = "Secreto con las credenciales de la base."
-  value       = module.timescaledb.secret_arn
+output "database_secret_arns" {
+  description = "Secretos de la base por rol: admin (solo migrate), app (servicios) y ro (solo lectura)."
+  value       = module.timescaledb.secret_arns
 }
 
 output "msk_cluster_name" {
@@ -33,9 +33,19 @@ output "msk_cluster_name" {
   value       = module.msk.cluster_name
 }
 
-output "bootstrap_brokers_sasl_iam" {
-  description = "Brokers SASL/IAM; los lee la raíz envs/dev-topics para crear los tópicos."
-  value       = module.msk.bootstrap_brokers_sasl_iam
+output "bootstrap_brokers_parameter_name" {
+  description = "Nombre del parámetro de SSM con los brokers SASL/IAM: es el valor de brokers_parameter_name de envs/dev-topics (sin remote state)."
+  value       = aws_ssm_parameter.bootstrap_brokers.name
+}
+
+output "topics_admin_security_group_id" {
+  description = "SG que debe llevar el runner (o el túnel SSM) que aplica envs/dev-topics: es el único origen admitido por MSK además de las tareas."
+  value       = aws_security_group.topics_admin.id
+}
+
+output "topics_admin_policy_arn" {
+  description = "Política IAM del principal que aplica envs/dev-topics (crear y describir los tópicos del catálogo, leer el parámetro de brokers)."
+  value       = aws_iam_policy.topics_admin.arn
 }
 
 output "alarms_topic_arn" {

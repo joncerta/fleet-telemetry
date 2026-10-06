@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDatabaseCheck } from "./readiness.js";
+import { createDatabaseCheck, createFeedCheck } from "./readiness.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -50,5 +50,19 @@ describe("createDatabaseCheck", () => {
 
   it("se llama database", () => {
     expect(createDatabaseCheck({ query: vi.fn() }, { warn: vi.fn() }).name).toBe("database");
+  });
+});
+
+describe("createFeedCheck", () => {
+  it("se llama sse-feed y refleja si el consumer está listo, sin cachear el estado", async () => {
+    let ready = false;
+    const check = createFeedCheck({ isReady: () => ready });
+
+    expect(check.name).toBe("sse-feed");
+    await expect(check.check()).resolves.toBe(false);
+    ready = true;
+    await expect(check.check()).resolves.toBe(true);
+    ready = false;
+    await expect(check.check()).resolves.toBe(false);
   });
 });

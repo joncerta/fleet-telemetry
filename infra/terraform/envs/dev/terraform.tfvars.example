@@ -17,3 +17,17 @@ monthly_budget_usd = 0
 budget_emails      = ["<correo>"]
 
 alarm_emails = []
+
+# DECISION: origenes https de la web que llamaran a fleet-api con la cookie de sesion (depende del dominio de la web).
+fleet_api_cors_origins = ["https://<dominio-de-la-web>"]
+
+# DECISION: URL https del ALB (dominio del certificado) con la que el agente llama a fleet-api.
+agent_fleet_api_url = "https://<dominio-del-alb>"
+
+# La API key de Anthropic NO va aqui: se pasa por TF_VAR_anthropic_api_key solo al crear o rotar (variable efimera).
+
+# Primer despliegue: 0 en los tres servicios hasta que existan los topicos (ver el README, "Orden de despliegue").
+gateway_desired_count   = 0
+processor_desired_count = 0
+fleet_api_desired_count = 0
+agent_desired_count     = 0

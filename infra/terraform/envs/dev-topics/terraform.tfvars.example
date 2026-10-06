@@ -3,5 +3,5 @@
 aws_region   = "<DECISION: la misma region que envs/dev>"
 owner        = "<equipo o persona dueña del ambiente>"
 cost_center  = "<centro de costos>"
-state_bucket = "<bucket-de-estado>"
-state_region = "<region del bucket>"
+# Salida bootstrap_brokers_parameter_name de envs/dev (publicado por la plataforma; sin remote state).
+brokers_parameter_name = "<nombre del parametro de SSM>"

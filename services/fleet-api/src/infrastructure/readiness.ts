@@ -42,3 +42,8 @@ export function createDatabaseCheck(pool: Pingable, logger: Pick<Logger, "warn">
     },
   };
 }
+
+/** Sonda del consumer de Kafka que alimenta el SSE: lista mientras está unido al grupo y consumiendo (ver `FleetEventFeed.isReady`). */
+export function createFeedCheck(feed: { isReady(): boolean }): ReadinessCheck {
+  return { name: "sse-feed", check: () => Promise.resolve(feed.isReady()) };
+}

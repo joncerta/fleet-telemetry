@@ -59,6 +59,7 @@ Un agente LangChain responde preguntas en lenguaje natural usando herramientas t
 11. **Resiliencia**:
     - Toda llamada entre microservicios pasa por circuit breaker (opossum), creado una vez por dependencia (no por request).
     - Con timeout, `errorFilter` (los 4xx no abren el circuito) y un fallback explícito que nunca se hace pasar por datos reales.
+    - Los proveedores externos (el modelo del agente) también van detrás de un breaker. Excepción: sus 408 y 429 **sí** abren el circuito, porque indican que el proveedor está saturado y no que la petición esté mal (ADR-011).
 12. **SQL**:
     - Siempre parametrizado (`$1`), sin concatenar strings. Los identificadores dinámicos salen de una allowlist.
     - Consultas de listado con `LIMIT`; consultas a hypertables con rango de tiempo.

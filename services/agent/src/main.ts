@@ -45,14 +45,35 @@ const useCases = {
   getActiveAlerts: createGetActiveAlerts({ fleet }),
 };
 
+// El modelo se crea UNA vez y lleva el breaker del proveedor (igual que el cliente de fleet-api): un breaker por pregunta no abriría nunca.
 // `loadAgentConfig` ya exigió la API key con el proveedor real; con el de guion no se usa.
-const model = createChatModel({ provider: config.AGENT_MODEL_PROVIDER, model: config.AGENT_MODEL, apiKey: config.ANTHROPIC_API_KEY });
+const model = createChatModel({
+  provider: config.AGENT_MODEL_PROVIDER,
+  model: config.AGENT_MODEL,
+  apiKey: config.ANTHROPIC_API_KEY,
+  callTimeoutMs: config.AGENT_MODEL_TIMEOUT_MS,
+  maxConcurrency: config.AGENT_MODEL_MAX_CONCURRENCY,
+  breaker: {
+    errorThresholdPercentage: config.AGENT_BREAKER_ERROR_THRESHOLD_PERCENTAGE,
+    volumeThreshold: config.AGENT_BREAKER_VOLUME_THRESHOLD,
+    resetTimeoutMs: config.AGENT_BREAKER_RESET_TIMEOUT_MS,
+    rollingWindowMs: config.AGENT_BREAKER_ROLLING_WINDOW_MS,
+  },
+  logger,
+});
 
 const agent = createLangChainChatAgent({
   model,
   systemPrompt: SYSTEM_PROMPT,
   maxIterations: config.AGENT_MAX_ITERATIONS,
   timeoutMs: config.AGENT_TIMEOUT_MS,
+  modelName: config.AGENT_MODEL_PROVIDER === "anthropic" ? config.AGENT_MODEL : config.AGENT_MODEL_PROVIDER,
+  // Costo por pregunta: solo cifras, el modelo y el tenant. Nunca el texto de la pregunta ni de la respuesta.
+  onUsage: (usage, context) =>
+    logger.info(
+      { tenantId: context.identity.tenantId, correlationId: context.correlationId, model: usage.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+      "Uso del modelo",
+    ),
   toolsFor: ({ context, record }) =>
     createFleetTools({
       ...useCases,
@@ -75,7 +96,7 @@ const app = await buildApp({
   bodyLimitBytes: BODY_LIMIT_BYTES,
   rateLimit: { max: config.AGENT_RATE_LIMIT_MAX, timeWindowMs: config.AGENT_RATE_LIMIT_WINDOW_MS },
   corsOrigins: config.AGENT_CORS_ORIGINS,
-  checkHealth: createCheckHealth({ fleetApi: breaker }),
+  checkHealth: createCheckHealth({ fleetApi: breaker, model: { state: () => model.breakerState() } }),
   registerRoutes: (instance) => {
     registerChatRoute(instance, {
       auth,
@@ -92,8 +113,9 @@ const lifecycle = installGracefulShutdown({
   steps: [
     // 1) Deja de aceptar conexiones nuevas y espera a las preguntas en vuelo.
     { name: "cerrar el servidor HTTP", run: () => app.close() },
-    // 2) Con nada en vuelo, libera los temporizadores del breaker.
+    // 2) Con nada en vuelo, libera los temporizadores de los breakers.
     { name: "cerrar el breaker de fleet-api", run: () => Promise.resolve(fleet.shutdown()) },
+    { name: "cerrar el breaker del modelo", run: () => Promise.resolve(model.shutdown()) },
   ],
 });
 

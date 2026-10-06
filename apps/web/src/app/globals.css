@@ -1,0 +1,14 @@
+@import "tailwindcss";
+/* El tema sale de src/design/tokens.ts (vía tailwind.config.ts): el mismo módulo que colorea las capas del mapa. */
+@config "../../tailwind.config.ts";
+
+@layer base {
+  body {
+    @apply bg-canvas font-sans text-sm text-ink antialiased;
+  }
+
+  /* Foco visible en todo control: teclado primero. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-focus;
+  }
+}

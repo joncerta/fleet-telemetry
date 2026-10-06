@@ -93,3 +93,65 @@ variable "processor_consumer_group" {
   type        = string
   default     = "processor"
 }
+
+variable "fleet_api_desired_count" {
+  description = "Réplicas de fleet-api. En el primer despliegue va en 0 junto con el gateway y el processor (ver el README, orden de despliegue)."
+  type        = number
+  default     = 1
+}
+
+variable "fleet_api_cors_origins" {
+  description = "Orígenes de la web autorizados a llamar a fleet-api con la cookie de sesión (https://host[:puerto], sin ruta ni comodín). Decisión pendiente: depende del dominio de la web."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.fleet_api_cors_origins) >= 1 && alltrue([for origin in var.fleet_api_cors_origins : can(regex("^https://[^/*]+$", origin))])
+    error_message = "Cada origen debe ser https://host[:puerto], sin ruta ni comodín."
+  }
+}
+
+variable "agent_desired_count" {
+  description = "Réplicas del agente. En el primer despliegue va en 0 (hasta escribir ANTHROPIC_API_KEY y tener la URL pública de fleet-api; ver el README)."
+  type        = number
+  default     = 1
+}
+
+variable "agent_fleet_api_url" {
+  description = "URL base HTTPS de fleet-api que usa el agente (la del ALB: https://<dominio>, sin ruta ni credenciales). Decisión pendiente: depende del dominio del certificado."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[^/@*]+$", var.agent_fleet_api_url))
+    error_message = "Debe ser https://host[:puerto], sin ruta, credenciales ni comodín."
+  }
+}
+
+variable "anthropic_api_key" {
+  description = "ANTHROPIC_API_KEY del agente. EFÍMERA y sensible: no queda en el estado ni en el plan. Pásala solo al crear o rotar la clave (TF_VAR_anthropic_api_key) junto con anthropic_api_key_version; nunca en un tfvars."
+  type        = string
+  default     = null
+  sensitive   = true
+  ephemeral   = true
+}
+
+variable "anthropic_api_key_version" {
+  description = "Versión del secreto de la API key (entero >= 1). Subirla reescribe el valor de anthropic_api_key en Secrets Manager."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.anthropic_api_key_version >= 1 && var.anthropic_api_key_version == floor(var.anthropic_api_key_version)
+    error_message = "anthropic_api_key_version debe ser un entero >= 1."
+  }
+}
+
+variable "credentials_version" {
+  description = "Versión de las credenciales generadas (contraseñas de la base y SESSION_SECRET), entero entre 1 y 99. Subirla las reescribe en Secrets Manager (rotación); ver el README."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.credentials_version >= 1 && var.credentials_version == floor(var.credentials_version) && var.credentials_version < 100
+    error_message = "credentials_version debe ser un entero entre 1 y 99."
+  }
+}

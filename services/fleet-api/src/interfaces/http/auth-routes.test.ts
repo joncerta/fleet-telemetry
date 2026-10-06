@@ -186,7 +186,13 @@ describe("GET /v1/auth/session", () => {
   it("una cookie con la firma alterada responde 401", async () => {
     const { app, codec } = await makeApp();
     const token = codec.sign({ ...NORTE, exp: Math.floor(Date.now() / 1_000) + 600 });
-    const forged = `${SESSION_COOKIE_NAME}=${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
+    // Se invierte un byte de la firma YA decodificada: alterar el último carácter de base64url aporta solo 4 bits y a veces decodifica igual.
+    const [version, payload, signature] = token.split(".");
+    const bytes = Buffer.from(signature ?? "", "base64url");
+    bytes[0] = (bytes[0] ?? 0) ^ 0xff;
+    const tampered = `${version}.${payload}.${bytes.toString("base64url")}`;
+    expect(tampered).not.toBe(token);
+    const forged = `${SESSION_COOKIE_NAME}=${tampered}`;
 
     expect((await app.inject({ method: "GET", url: "/v1/auth/session", headers: { cookie: forged } })).statusCode).toBe(401);
   });

@@ -15,6 +15,13 @@ locals {
   # Servicios con puerto = detrás del ALB; sin puerto (el processor) = solo consumen de Kafka.
   http_services = { for name, service in var.services : name => service if service.container_port != null }
   all_tasks     = merge(var.services, var.jobs)
+
+  # ARN de cada secreto que una tarea inyecta, sacado de sus `secrets` (valueFrom = <arn del secreto>:<clave json>::). Un ARN de Secrets
+  # Manager tiene 7 campos separados por ":" (arn:aws:secretsmanager:<región>:<cuenta>:secret:<nombre>-<sufijo>): el rol de ejecución de
+  # cada tarea puede leer exactamente los secretos que usa, sin una lista aparte que se desincronice.
+  task_secret_arns = {
+    for name, task in local.all_tasks : name => distinct([for value_from in values(task.secrets) : join(":", slice(split(":", value_from), 0, 7))])
+  }
 }
 
 # --- Clúster --------------------------------------------------------------------------------------------------------------
@@ -36,7 +43,8 @@ resource "aws_cloudwatch_log_group" "task" {
   kms_key_id        = var.kms_key_arn
 }
 
-# --- IAM: rol de ejecución (compartido: baja imágenes, escribe logs, lee los secretos listados) -------------------------
+# --- IAM: un rol de ejecución POR TAREA (baja imágenes, escribe SUS logs, lee SUS secretos) --------------------------------
+# Antes era un rol compartido que leía todos los secretos: con eso, un servicio comprometido leería el superusuario de la base.
 data "aws_iam_policy_document" "tasks_assume" {
   statement {
     effect  = "Allow"
@@ -50,6 +58,8 @@ data "aws_iam_policy_document" "tasks_assume" {
 }
 
 data "aws_iam_policy_document" "execution" {
+  for_each = local.all_tasks
+
   # GetAuthorizationToken no admite recursos específicos: AWS exige "*" (solo entrega un token de login a ECR).
   statement {
     sid       = "EcrLogin"
@@ -70,58 +80,72 @@ data "aws_iam_policy_document" "execution" {
   }
 
   statement {
-    sid       = "WriteTaskLogs"
+    sid       = "WriteOwnTaskLogs"
     effect    = "Allow"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = [for group in aws_cloudwatch_log_group.task : "${group.arn}:*"]
+    resources = ["${aws_cloudwatch_log_group.task[each.key].arn}:*"]
   }
 
-  statement {
-    sid       = "ReadTaskSecrets"
-    effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = var.secret_arns
+  dynamic "statement" {
+    for_each = length(each.value.secrets) > 0 ? [1] : []
+
+    content {
+      sid       = "ReadOwnTaskSecrets"
+      effect    = "Allow"
+      actions   = ["secretsmanager:GetSecretValue"]
+      resources = local.task_secret_arns[each.key]
+    }
   }
 
-  statement {
-    sid       = "DecryptSecrets"
-    effect    = "Allow"
-    actions   = ["kms:Decrypt"]
-    resources = [var.kms_key_arn]
+  dynamic "statement" {
+    for_each = length(each.value.secrets) > 0 ? [1] : []
 
-    condition {
-      test     = "StringEquals"
-      variable = "kms:ViaService"
-      values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+    content {
+      sid       = "DecryptSecrets"
+      effect    = "Allow"
+      actions   = ["kms:Decrypt"]
+      resources = [var.kms_key_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+      }
     }
   }
 }
 
 resource "aws_iam_role" "execution" {
-  name               = "${var.name}-task-execution"
+  for_each = local.all_tasks
+
+  name               = "${var.name}-${each.key}-exec"
   assume_role_policy = data.aws_iam_policy_document.tasks_assume.json
 }
 
 resource "aws_iam_role_policy" "execution" {
+  for_each = local.all_tasks
+
   name   = "pull-logs-secrets"
-  role   = aws_iam_role.execution.id
-  policy = data.aws_iam_policy_document.execution.json
+  role   = aws_iam_role.execution[each.key].id
+  policy = data.aws_iam_policy_document.execution[each.key].json
 }
 
 # --- IAM: un rol de tarea por servicio, con la política mínima que declara la raíz (Kafka por tópico, etc.) ----------------
+# Todas las tareas tienen su propio rol (identidad propia en CloudTrail); sin `task_policy_json` el rol no tiene permisos (p. ej. el agente,
+# que solo habla HTTP con fleet-api y con la API del modelo).
 resource "aws_iam_role" "task" {
-  for_each = { for name, task in local.all_tasks : name => task if task.task_policy_json != null }
+  for_each = local.all_tasks
 
   name               = "${var.name}-${each.key}"
   assume_role_policy = data.aws_iam_policy_document.tasks_assume.json
 }
 
 resource "aws_iam_role_policy" "task" {
-  for_each = aws_iam_role.task
+  for_each = { for name, task in local.all_tasks : name => task if task.task_policy_json != null }
 
   name   = "least-privilege"
-  role   = each.value.id
-  policy = local.all_tasks[each.key].task_policy_json
+  role   = aws_iam_role.task[each.key].id
+  policy = each.value.task_policy_json
 }
 
 # --- Definiciones de tarea (servicios y jobs de un solo uso, como las migraciones) -------------------------------------
@@ -133,8 +157,8 @@ resource "aws_ecs_task_definition" "this" {
   network_mode             = "awsvpc"
   cpu                      = each.value.cpu
   memory                   = each.value.memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = try(aws_iam_role.task[each.key].arn, null)
+  execution_role_arn       = aws_iam_role.execution[each.key].arn
+  task_role_arn            = aws_iam_role.task[each.key].arn
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -192,14 +216,22 @@ resource "aws_lb" "this" {
   drop_invalid_header_fields = true
   enable_deletion_protection = var.alb_deletion_protection
 
-  # SSE: el ALB cierra una conexión sin tráfico tras este tiempo. Debe superar el intervalo del heartbeat del SSE del backend
-  # (con holgura de al menos 2 latidos perdidos). REQUISITO PARA EL BACKEND: heartbeat cada <= sse_heartbeat_interval_seconds.
+  # Dos restricciones a la vez sobre el idle timeout:
+  #  - SSE: por ENCIMA de 2 latidos del SSE (si se pierde uno, el ALB no corta el stream). Requisito para el backend: heartbeat <= sse_heartbeat_interval_seconds.
+  #  - Keep-alive: por DEBAJO del keep-alive del servidor (Fastify cierra las conexiones ociosas a los 72 s). Si el ALB mantuviera una
+  #    conexión más tiempo que el backend, reutilizaría una que el backend ya cerró y respondería 502 de forma intermitente.
+  # Con 30 s de heartbeat: 60 <= idle timeout < 72. Se eligió 65 (el default de AWS es 60, que no deja margen sobre los 2 latidos).
   idle_timeout = var.alb_idle_timeout_seconds
 
   lifecycle {
     precondition {
       condition     = var.alb_idle_timeout_seconds >= 2 * var.sse_heartbeat_interval_seconds
       error_message = "alb_idle_timeout_seconds debe ser al menos el doble de sse_heartbeat_interval_seconds, o el ALB cortará los streams SSE."
+    }
+
+    precondition {
+      condition     = var.alb_idle_timeout_seconds < var.backend_keep_alive_timeout_seconds
+      error_message = "alb_idle_timeout_seconds debe ser MENOR que backend_keep_alive_timeout_seconds (Fastify: 72 s), o el ALB reutilizará conexiones que el backend ya cerró y habrá 502 intermitentes."
     }
   }
 }

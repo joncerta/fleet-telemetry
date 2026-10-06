@@ -1,0 +1,4 @@
+source "https://rubygems.org"
+
+# Versión exacta de Fastlane (no hay Ruby local para generar Gemfile.lock: ver apps/mobile/CLAUDE.md, "CI/CD").
+gem "fastlane", "2.240.1"

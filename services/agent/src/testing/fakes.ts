@@ -82,6 +82,7 @@ export function makeScriptedAgent(fleet: FleetData, options: { maxIterations?: n
     systemPrompt: SYSTEM_PROMPT,
     maxIterations: options.maxIterations ?? 6,
     timeoutMs: options.timeoutMs ?? 30_000,
+    modelName: "scripted",
     toolsFor: ({ context, record }) => createFleetTools({ ...useCases, context, record, onError: options.onToolError ?? (() => undefined) }),
   });
 }

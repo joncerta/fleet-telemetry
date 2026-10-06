@@ -6,7 +6,7 @@ import type { AgentHealthResponse } from "@fleet/contracts";
 import type { Logger } from "@fleet/platform";
 import Fastify, { LogController, type FastifyInstance, type FastifyRequest, type RawServerDefault } from "fastify";
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
-import { AgentFailedError, AgentTimeoutError } from "../../application/errors.js";
+import { AgentCancelledError, AgentFailedError, AgentTimeoutError } from "../../application/errors.js";
 import { CORRELATION_ID_HTTP_HEADER } from "../../domain/protocol.js";
 import { resolveCorrelationId } from "./correlation.js";
 import { mapError, notFoundError } from "./errors.js";
@@ -102,6 +102,8 @@ export async function buildApp(deps: AppDependencies): Promise<AgentApp> {
       // Solo los tipos: la causa (un error del proveedor del modelo) puede arrastrar cabeceras, claves o la pregunta del usuario.
       const cause: unknown = error.cause;
       request.log.error({ errorType: error.name, causeType: cause instanceof Error ? cause.name : typeof cause }, "El agente no pudo responder");
+    } else if (error instanceof AgentCancelledError) {
+      request.log.info({ errorType: error.name }, "Pregunta cancelada por el cliente");
     } else if (mapped.statusCode >= 500) {
       request.log.error({ err: error }, "Error no controlado en la petición");
     } else {
