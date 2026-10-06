@@ -33,7 +33,8 @@ export function KpiGrid({ summary }: { summary: Loadable<FleetSummary> }) {
           </div>
         ))}
       </dl>
-      {summary.status === "error" && (
+      {/* Por `error` (que `loading()` conserva), no por el estado: con la API caída, cada recarga no desmonta y vuelve a montar el aviso. */}
+      {summary.error !== null && (
         <div className="mt-2">
           <PanelNote tone="error">
             {summary.error}

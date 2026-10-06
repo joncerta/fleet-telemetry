@@ -1,12 +1,15 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
-import { useFleet, useServerNow, useServices } from "../../app-services/services-context";
+import { useFleet, useServerNow, useServices, useThrottledFleet } from "../../app-services/services-context";
 import { Panel, PanelNote } from "../../components/panel";
 import { StatusLabel } from "../../components/status";
 import { formatAgo, formatInteger } from "../../lib/format";
+import type { FleetStore } from "../fleet/fleet-store";
 import { criticalZoneIdsOf, speedKmh } from "../fleet/vehicle-status";
 import { vehicleRows, type VehicleRow } from "./vehicle-rows";
+
+const selectVehicles = (state: FleetStore) => state.vehicles;
 
 const VehicleItem = memo(function VehicleItem({ row, selected, onSelect }: { row: VehicleRow; selected: boolean; onSelect: (vehicleId: string) => void }) {
   const { vehicle, status, minutesSinceData } = row;
@@ -70,7 +73,8 @@ export function VehicleList({ rows, selectedId, onSelect }: { rows: readonly Veh
 
 export function VehiclesPanel() {
   const { fleetStore } = useServices();
-  const vehicles = useFleet((state) => state.vehicles);
+  // A la cadencia del mapa (500 ms), no con cada lote de eventos (200 ms): la lista tiene cientos de filas.
+  const vehicles = useThrottledFleet(selectVehicles);
   const ready = useFleet((state) => state.ready);
   const zones = useFleet((state) => state.zones.data);
   const selectedId = useFleet((state) => state.selectedVehicleId);

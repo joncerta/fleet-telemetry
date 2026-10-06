@@ -1,10 +1,11 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { publicEnv } from "../config/public-env";
 import type { SessionStore } from "../features/auth/session-store";
 import type { FleetStore } from "../features/fleet/fleet-store";
+import { subscribeThrottled } from "../features/fleet/throttled-subscription";
 import { serverNowMs } from "../lib/time/server-clock";
 import { createAppServices, type AppServices } from "./app-services";
 
@@ -28,6 +29,20 @@ export function useServices(): AppServices {
 /** Selector fino sobre el store de la flota (un componente nunca lee el store completo). */
 export function useFleet<T>(selector: (state: FleetStore) => T): T {
   return useStore(useServices().fleetStore, selector);
+}
+
+/** Cadencia de las listas del panel: la misma del `setData` del mapa (apps/web/CLAUDE.md, regla 8). */
+export const PANEL_THROTTLE_MS = 500;
+
+/**
+ * Como `useFleet`, pero el valor se actualiza a lo sumo cada `intervalMs`: las listas largas no se recalculan con cada lote de eventos.
+ * `selector` debe ser estable (función de módulo o `useCallback`); `equals` evita renderizar si el resultado es equivalente.
+ */
+export function useThrottledFleet<T>(selector: (state: FleetStore) => T, intervalMs = PANEL_THROTTLE_MS, equals: (a: T, b: T) => boolean = Object.is): T {
+  const { fleetStore } = useServices();
+  const [value, setValue] = useState(() => selector(fleetStore.getState()));
+  useEffect(() => subscribeThrottled(fleetStore, selector, intervalMs, setValue, equals), [fleetStore, selector, intervalMs, equals]);
+  return value;
 }
 
 export function useSession<T>(selector: (state: SessionStore) => T): T {

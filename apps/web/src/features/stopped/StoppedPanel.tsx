@@ -1,11 +1,15 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import { useFleet, useServerNow, useServices } from "../../app-services/services-context";
+import type { FleetStore } from "../fleet/fleet-store";
+import { useFleet, useServerNow, useServices, useThrottledFleet } from "../../app-services/services-context";
 import { Panel, PanelNote } from "../../components/panel";
 import { formatDuration, formatTime } from "../../lib/format";
+import type { Loadable } from "../../lib/loadable";
 import { STOPPED_QUERY } from "../fleet/fleet-sync";
 import { stoppedRows, type StoppedRow } from "./stopped-view";
+
+const selectVehicles = (state: FleetStore) => state.vehicles;
 
 /** Presentación (sin store). */
 export function StoppedList({ rows, onSelect }: { rows: readonly StoppedRow[]; onSelect: (vehicleId: string) => void }) {
@@ -31,10 +35,39 @@ export function StoppedList({ rows, onSelect }: { rows: readonly StoppedRow[]; o
   );
 }
 
+/**
+ * Cuerpo del panel (sin store). El aviso de error sale de `error` (que `loading()` conserva entre recargas) y no del estado: con la API
+ * caída, cada recarga no desmonta y vuelve a montar el `role="alert"`, que el lector de pantalla anunciaría de nuevo.
+ */
+export function StoppedBody({
+  stopped,
+  rows,
+  onSelect,
+}: {
+  stopped: Pick<Loadable<unknown>, "data" | "error" | "updatedAt">;
+  rows: readonly StoppedRow[];
+  onSelect: (vehicleId: string) => void;
+}) {
+  return (
+    <>
+      {stopped.data === null && stopped.error === null && <PanelNote>Cargando…</PanelNote>}
+      {stopped.data !== null && <StoppedList rows={rows} onSelect={onSelect} />}
+      {stopped.error !== null && (
+        <div className="mt-2">
+          <PanelNote tone="error">
+            {stopped.error}
+            {stopped.updatedAt !== null && ` Lista de las ${formatTime(stopped.updatedAt)}.`}
+          </PanelNote>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function StoppedPanel() {
   const { fleetStore } = useServices();
   const stopped = useFleet((state) => state.stopped);
-  const vehicles = useFleet((state) => state.vehicles);
+  const vehicles = useThrottledFleet(selectVehicles);
   const serverNow = useServerNow();
   const rows = useMemo(
     () => (stopped.data === null || serverNow === null ? [] : stoppedRows(stopped.data.items, vehicles, serverNow, STOPPED_QUERY.minMinutes)),
@@ -44,16 +77,7 @@ export function StoppedPanel() {
 
   return (
     <Panel id="stopped-heading" title={`Detenidos +${STOPPED_QUERY.minMinutes} min en zonas críticas`}>
-      {stopped.data === null && stopped.status !== "error" && <PanelNote>Cargando…</PanelNote>}
-      {stopped.data !== null && <StoppedList rows={rows} onSelect={select} />}
-      {stopped.status === "error" && (
-        <div className="mt-2">
-          <PanelNote tone="error">
-            {stopped.error}
-            {stopped.updatedAt !== null && ` Lista de las ${formatTime(stopped.updatedAt)}.`}
-          </PanelNote>
-        </div>
-      )}
+      <StoppedBody stopped={stopped} rows={rows} onSelect={select} />
     </Panel>
   );
 }
