@@ -66,6 +66,9 @@ describe("loadAgentConfig", () => {
       for (const bad of ["abc", "wrkspc_", "wrkspc_a-b", `wrkspc_${"a".repeat(65)}`]) {
         expect(() => loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: bad })).toThrow(/ANTHROPIC_WORKSPACE_ID/);
       }
+      // Centinela inválido (lleva "-"): el error nombra la variable y no repite el valor.
+      expect(() => loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: "wrkspc_SENTINEL-x" })).toThrow(/ANTHROPIC_WORKSPACE_ID/);
+      expect(() => loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: "wrkspc_SENTINEL-x" })).not.toThrow(/SENTINEL/);
     });
   });
 

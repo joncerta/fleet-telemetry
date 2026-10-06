@@ -145,6 +145,7 @@ export async function startStack(env: E2eEnv): Promise<E2eStack> {
     AGENT_MODEL_PROVIDER: "scripted",
     // Hermético: aunque el `.env` tenga una clave real, el e2e no la usa ni se la pasa al hijo.
     ANTHROPIC_API_KEY: "",
+    ANTHROPIC_WORKSPACE_ID: "",
     AGENT_USER_RATE_LIMIT_MAX: "200",
     AGENT_FLEET_API_TIMEOUT_MS: "2000",
     AGENT_BREAKER_VOLUME_THRESHOLD: String(E2E_AGENT_BREAKER_VOLUME_THRESHOLD),

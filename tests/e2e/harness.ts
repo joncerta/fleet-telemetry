@@ -221,6 +221,7 @@ export function childEnv(runId: string): NodeJS.ProcessEnv {
     AGENT_MODEL_PROVIDER: "scripted",
     // Hermético: aunque el .env tenga una clave real, el e2e no la usa ni se la pasa al hijo.
     ANTHROPIC_API_KEY: "",
+    ANTHROPIC_WORKSPACE_ID: "",
     AGENT_TRUSTED_PROXY_HOPS: "1",
     AGENT_USER_RATE_LIMIT_MAX: "200",
     AGENT_MODEL_TIMEOUT_MS: "20000",
