@@ -5,6 +5,8 @@ packages:
   # Pruebas e2e contra el stack real (tests/e2e/**/*.e2e.test.ts). Es un paquete privado para que
   # Turborepo le pase las variables de entorno y lo incluya en typecheck y lint.
   - "tests/e2e"
+  # Comandos solo para local (db:seed, device:token). Paquete privado para que Turborepo lo incluya en typecheck, lint y test.
+  - "tools/dev-data"
 
 # Versiones compartidas: cada paquete declara `catalog:` en vez de repetir el rango.
 catalog:
