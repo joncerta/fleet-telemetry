@@ -30,7 +30,7 @@ import {
   zoneFeatureCollectionSchema,
   zoneFeatureCollectionTolerantSchema,
 } from "../fleet.js";
-import { healthResponseSchema } from "../health.js";
+import { healthResponseSchema, livenessResponseSchema } from "../health.js";
 import {
   apiErrorSchema,
   batchAckSchema,
@@ -75,6 +75,7 @@ export const contractRegistry: readonly ContractEntry[] = [
   { name: "device-token", schema: deviceTokenSchema, versions: [1] },
   { name: "api-error", schema: apiErrorSchema, versions: [1] },
   { name: "health-response", schema: healthResponseSchema, versions: [1] },
+  { name: "liveness-response", schema: livenessResponseSchema, versions: [1] },
   // Read model de la flota (fase 1b, fleet.ts): todo v1. Las variantes tolerantes tienen su propia entrada y su fixture.
   { name: "vehicle-state", schema: vehicleStateSchema, versions: [1] },
   { name: "vehicle-state-tolerant", schema: vehicleStateTolerantSchema, versions: [1] },
