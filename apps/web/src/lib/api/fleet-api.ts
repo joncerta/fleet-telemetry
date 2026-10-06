@@ -3,12 +3,19 @@ import {
   fleetSummarySchema,
   pairingCodeSchema,
   sessionSchema,
+  userListResponseSchema,
+  vehicleCatalogItemSchema,
+  vehicleListResponseSchema,
   stoppedVehiclesResponseTolerantSchema,
   zoneFeatureCollectionTolerantSchema,
   type AlertsResponseTolerant,
   type FleetSummary,
   type LoginRequest,
   type PairingCode,
+  type UserListResponse,
+  type VehicleCatalogItem,
+  type VehicleCreateRequest,
+  type VehicleListResponse,
   type Session,
   type StoppedVehiclesResponseTolerant,
   type ZoneFeatureCollectionTolerant,
@@ -22,6 +29,8 @@ export const FLEET_API_PATHS = {
   session: "/v1/auth/session",
   logout: "/v1/auth/logout",
   summary: "/v1/summary",
+  vehicles: "/v1/vehicles",
+  users: "/v1/users",
   stoppedVehicles: "/v1/vehicles/stopped",
   alerts: "/v1/alerts",
   zones: "/v1/zones/geojson",
@@ -44,7 +53,13 @@ export interface FleetApi {
   getAlerts(params: { status: "active" | "all"; limit: number }, signal?: AbortSignal): Promise<AlertsResponseTolerant>;
   getStoppedVehicles(params: StoppedVehiclesParams, signal?: AbortSignal): Promise<StoppedVehiclesResponseTolerant>;
   getZones(signal?: AbortSignal): Promise<ZoneFeatureCollectionTolerant>;
-  createPairingCode(vehicleId: string): Promise<PairingCode>;
+  createPairingCode(vehicleId: string, signal?: AbortSignal): Promise<PairingCode>;
+  /** Catálogo de vehículos del tenant (con o sin telemetría), ordenado por placa. */
+  listVehicles(limit: number, signal?: AbortSignal): Promise<VehicleListResponse>;
+  /** Alta de un vehículo. `request` ya debe estar validado y normalizado con `vehicleCreateRequestSchema`. 409 `plate_taken` si la placa existe. */
+  createVehicle(request: VehicleCreateRequest, signal?: AbortSignal): Promise<VehicleCatalogItem>;
+  /** Usuarios del tenant de la sesión, ordenados por nombre (solo lectura). */
+  listUsers(limit: number, signal?: AbortSignal): Promise<UserListResponse>;
 }
 
 /**
@@ -83,7 +98,13 @@ export function createFleetApi(http: HttpClient, onUnauthorized: () => void): Fl
       );
     },
     getZones: (signal) => authed(() => http.request(FLEET_API_PATHS.zones, { schema: zoneFeatureCollectionTolerantSchema, signal })),
-    createPairingCode: (vehicleId) =>
-      authed(() => http.request(FLEET_API_PATHS.pairingCodes, { method: "POST", body: { vehicleId }, schema: pairingCodeSchema })),
+    createPairingCode: (vehicleId, signal) =>
+      authed(() => http.request(FLEET_API_PATHS.pairingCodes, { method: "POST", body: { vehicleId }, schema: pairingCodeSchema, signal })),
+    listVehicles: (limit, signal) =>
+      authed(() => http.request(`${FLEET_API_PATHS.vehicles}?${new URLSearchParams({ limit: String(limit) }).toString()}`, { schema: vehicleListResponseSchema, signal })),
+    createVehicle: (request, signal) =>
+      authed(() => http.request(FLEET_API_PATHS.vehicles, { method: "POST", body: request, schema: vehicleCatalogItemSchema, signal })),
+    listUsers: (limit, signal) =>
+      authed(() => http.request(`${FLEET_API_PATHS.users}?${new URLSearchParams({ limit: String(limit) }).toString()}`, { schema: userListResponseSchema, signal })),
   };
 }
