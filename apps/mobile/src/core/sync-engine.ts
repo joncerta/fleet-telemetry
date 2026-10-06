@@ -56,6 +56,7 @@ export interface SyncEngineDeps {
   readonly maxBatchPoints?: number;
   readonly maxBatchBytes?: number;
   readonly leaseMs?: number;
+  readonly unauthorizedProbeMs?: number;
   /** Eventos sin datos personales, para logs y diagnóstico. */
   readonly onEvent?: (event: SyncEvent) => void;
 }
@@ -80,6 +81,7 @@ export class SyncEngine {
   readonly #maxPoints: number;
   readonly #maxBytes: number;
   readonly #leaseMs: number;
+  readonly #probeMs: number;
   readonly #random: () => number;
   #batchLimit: number;
   #running = false;
@@ -92,6 +94,7 @@ export class SyncEngine {
     this.#maxPoints = deps.maxBatchPoints ?? PARAMS.maxBatchPoints;
     this.#maxBytes = deps.maxBatchBytes ?? PARAMS.maxBatchBytes;
     this.#leaseMs = deps.leaseMs ?? PARAMS.leaseMs;
+    this.#probeMs = deps.unauthorizedProbeMs ?? PARAMS.unauthorizedProbeMs;
     this.#random = deps.random ?? Math.random;
     this.#batchLimit = this.#maxPoints;
   }
@@ -103,10 +106,24 @@ export class SyncEngine {
   /** Tras guardar un token nuevo: levanta la pausa por 401/403 y el backoff. */
   async resume(): Promise<void> {
     await this.#d.store.setMeta("syncPausedReason", null);
+    await this.#d.store.setMeta("syncPausedAt", null);
     await this.#d.store.setMeta("nextAttemptAt", null);
     await this.#d.store.setMeta("backoffAttempt", "0");
     this.#hardBlockUntil = 0;
     this.#setPhase("idle");
+  }
+
+  /**
+   * Al arrancar: si la versión de la app cambió y el envío estaba pausado por un 400 (`client_error`, bug del cliente),
+   * la pausa se levanta: la versión nueva puede traer el arreglo. Devuelve `true` si levantó la pausa.
+   */
+  async onAppVersion(version: string): Promise<boolean> {
+    const { store } = this.#d;
+    if ((await store.getMeta("appVersion")) === version) return false;
+    await store.setMeta("appVersion", version);
+    if ((await store.getMeta("syncPausedReason")) !== "client_error") return false;
+    await this.resume();
+    return true;
   }
 
   /**
@@ -124,26 +141,34 @@ export class SyncEngine {
 
   async #drain(force: boolean, maxBatches: number): Promise<DrainResult> {
     const { store } = this.#d;
-    const paused = await store.getMeta("syncPausedReason");
-    if (paused !== null) {
+    // "Sin vincular" se deduce de las credenciales y no se persiste: vincular lo resuelve solo.
+    const token = await this.#d.tokens.getToken();
+    if (token === null) {
       this.#setPhase("paused");
       return this.#result("paused", 0, 0, 0, null);
     }
 
-    const nextAt = Number((await store.getMeta("nextAttemptAt")) ?? 0);
     const now = this.#d.now();
-    if (nextAt > now && !(force && now >= this.#hardBlockUntil)) {
-      this.#setPhase("backoff");
-      return this.#result("backoff", 0, 0, 0, nextAt);
+    let probing = false;
+    const paused = await store.getMeta("syncPausedReason");
+    if (paused !== null) {
+      // 401/403: cada N minutos se manda UN lote de prueba; si el servidor responde 202, el token volvió a ser válido.
+      // `client_error` (400) solo se levanta con `resume()` o una versión nueva de la app.
+      const pausedAt = Number((await store.getMeta("syncPausedAt")) ?? 0);
+      probing = paused === "unauthorized" && now - pausedAt >= this.#probeMs;
+      if (!probing) {
+        this.#setPhase("paused");
+        return this.#result("paused", 0, 0, 0, null);
+      }
+    } else {
+      const nextAt = Number((await store.getMeta("nextAttemptAt")) ?? 0);
+      if (nextAt > now && !(force && now >= this.#hardBlockUntil)) {
+        this.#setPhase("backoff");
+        return this.#result("backoff", 0, 0, 0, nextAt);
+      }
     }
 
     await store.reclaimExpired(now, this.#leaseMs);
-
-    const token = await this.#d.tokens.getToken();
-    if (token === null) {
-      await this.#pause("unlinked");
-      return this.#result("paused", 0, 0, 0, null);
-    }
 
     this.#setPhase("syncing");
     let sent = 0;
@@ -153,6 +178,10 @@ export class SyncEngine {
     while (batches < maxBatches) {
       const claimed = await store.claim(this.#batchLimit, this.#maxBytes, this.#d.now());
       if (claimed.length === 0) {
+        if (probing) {
+          this.#setPhase("paused");
+          return this.#result("paused", sent, rejected, batches, null);
+        }
         this.#setPhase("idle");
         return this.#result(batches === 0 ? "idle" : "drained", sent, rejected, batches, null);
       }
@@ -160,6 +189,7 @@ export class SyncEngine {
       const step = await this.#sendBatch(claimed, token);
       sent += step.sent;
       rejected += step.rejected;
+      if (probing && step.stop === null && (await store.getMeta("syncPausedReason")) === null) probing = false;
       if (step.stop !== null) return this.#result(step.stop, sent, rejected, batches, await this.#nextAttemptAt());
     }
     this.#setPhase("idle");
@@ -226,6 +256,9 @@ export class SyncEngine {
         nowMs: this.#d.now(),
       });
       this.#d.onEvent?.({ type: "batch_acked", ...result });
+      // Un 202 válido tras una pausa por 401 (lote de prueba): el token volvió a ser válido.
+      await store.setMeta("syncPausedReason", null);
+      await store.setMeta("syncPausedAt", null);
       await this.#recordAck(ack.data.serverTime, result.sent, result.rejected, sentAtMs);
       // El lote que funcionó permite volver a crecer tras un 413.
       this.#batchLimit = Math.min(this.#maxPoints, this.#batchLimit * 2);
@@ -239,10 +272,13 @@ export class SyncEngine {
     }
 
     if (status === 400) {
+      // Un 400 es un bug del cliente (o un proxy): UN solo lote a `dead` y el envío se pausa. Seguir reclamando lotes
+      // vaciaría la cola entera a `dead` con un error sistemático.
       await store.markDead(this.#d.newBatchId(), sendIds, `http_400:${errorCode(response.body)}`, this.#d.now());
       this.#d.onEvent?.({ type: "error", code: "http_400" });
       await this.#recordError("http_400");
-      return { sent: 0, rejected: 0, stop: null };
+      await this.#pause("client_error");
+      return { sent: 0, rejected: 0, stop: "paused" };
     }
 
     if (status === 401 || status === 403) {
@@ -307,6 +343,7 @@ export class SyncEngine {
 
   async #pause(reason: string): Promise<void> {
     await this.#d.store.setMeta("syncPausedReason", reason);
+    await this.#d.store.setMeta("syncPausedAt", String(this.#d.now()));
     this.#setPhase("paused");
   }
 

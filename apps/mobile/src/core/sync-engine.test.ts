@@ -221,10 +221,44 @@ describe("400, 401/403 y 413", () => {
 
     const result = await ctx.engine.drain();
 
-    expect(result.outcome).toBe("drained");
+    expect(result.outcome).toBe("paused");
     expect(await ctx.store.counts()).toMatchObject({ pending: 0, dead: 1 });
     expect(ctx.store.deadRows[0]?.reason).toBe("http_400:invalid_envelope");
     expect(ctx.transport.sentBatches).toHaveLength(1);
+  });
+
+  it("400 sistemático: con 3 lotes en cola, solo 1 va a dead, 2 quedan pending y el envío se pausa", async () => {
+    const ctx = setup({ maxBatchPoints: 1 });
+    await enqueue(ctx, 3);
+    ctx.transport.push(http(400, { error: { code: "invalid_envelope", message: "x" } }));
+    ctx.transport.push(http(400, { error: { code: "invalid_envelope", message: "x" } }));
+
+    const result = await ctx.engine.drain();
+
+    expect(result.outcome).toBe("paused");
+    expect(await ctx.store.counts()).toMatchObject({ pending: 2, inFlight: 0, dead: 1 });
+    expect(ctx.transport.sentBatches).toHaveLength(1);
+    expect(await ctx.store.getMeta("syncPausedReason")).toBe("client_error");
+
+    // Pausado: ni force ni nuevos drain envían.
+    expect((await ctx.engine.drain({ force: true })).outcome).toBe("paused");
+    expect(ctx.transport.sentBatches).toHaveLength(1);
+  });
+
+  it("la pausa por 400 se levanta con resume() o al cambiar la versión de la app, no antes", async () => {
+    const ctx = setup({ maxBatchPoints: 1 });
+    await enqueue(ctx, 2);
+    await ctx.engine.onAppVersion("1.0.0");
+    ctx.transport.push(http(400));
+    await ctx.engine.drain();
+
+    expect(await ctx.engine.onAppVersion("1.0.0")).toBe(false);
+    expect(await ctx.store.getMeta("syncPausedReason")).toBe("client_error");
+
+    expect(await ctx.engine.onAppVersion("1.0.1")).toBe(true);
+    expect(await ctx.store.getMeta("syncPausedReason")).toBeNull();
+    ctx.transport.push(acceptAll);
+    expect((await ctx.engine.drain()).outcome).toBe("drained");
   });
 
   it.each([401, 403])("%i: pausa el sync, no borra nada y pide token", async (status) => {
@@ -253,7 +287,53 @@ describe("400, 401/403 y 413", () => {
     const result = await ctx.engine.drain();
     expect(result.outcome).toBe("paused");
     expect(ctx.transport.sentBatches).toHaveLength(0);
-    expect(await ctx.store.getMeta("syncPausedReason")).toBe("unlinked");
+    // "unlinked" se deduce de las credenciales: no se persiste (no hay pausa que levantar al vincular).
+    expect(await ctx.store.getMeta("syncPausedReason")).toBeNull();
+  });
+
+  it("401: manda un lote de prueba cada N minutos; con 202 se reanuda solo", async () => {
+    const ctx = setup();
+    await enqueue(ctx, 2);
+    ctx.transport.push(http(401));
+    await ctx.engine.drain();
+    expect(await ctx.store.getMeta("syncPausedAt")).not.toBeNull();
+
+    // Antes del intervalo no prueba.
+    ctx.clock.now += 4 * 60_000;
+    expect((await ctx.engine.drain()).outcome).toBe("paused");
+    expect(ctx.transport.sentBatches).toHaveLength(1);
+
+    // Vence el intervalo y el token sigue inválido: un solo lote de prueba y vuelve a esperar.
+    ctx.clock.now += 61_000;
+    ctx.transport.push(http(401));
+    expect((await ctx.engine.drain()).outcome).toBe("paused");
+    expect(ctx.transport.sentBatches).toHaveLength(2);
+    ctx.clock.now += 60_000;
+    expect((await ctx.engine.drain()).outcome).toBe("paused");
+    expect(ctx.transport.sentBatches).toHaveLength(2);
+
+    // Token válido de nuevo (revocación levantada): con 202 se reanuda y drena.
+    ctx.clock.now += 5 * 60_000;
+    ctx.transport.push(acceptAll);
+    expect((await ctx.engine.drain()).outcome).toBe("drained");
+    expect(await ctx.store.getMeta("syncPausedReason")).toBeNull();
+    expect(await ctx.store.getMeta("syncPausedAt")).toBeNull();
+    expect((await ctx.store.counts()).pending).toBe(0);
+  });
+
+  it("una prueba exitosa tras un 401 levanta la pausa y sigue drenando el resto", async () => {
+    const ctx = setup({ maxBatchPoints: 1 });
+    await enqueue(ctx, 3);
+    ctx.transport.push(http(401));
+    await ctx.engine.drain();
+    ctx.clock.now += 6 * 60_000;
+    ctx.transport.push(acceptAll);
+    ctx.transport.push(acceptAll);
+    ctx.transport.push(acceptAll);
+    const probe = await ctx.engine.drain();
+    expect(probe.outcome).toBe("drained");
+    expect(ctx.transport.sentBatches).toHaveLength(4);
+    expect(await ctx.store.getMeta("syncPausedReason")).toBeNull();
   });
 
   it("413: parte el lote a la mitad y reintenta", async () => {

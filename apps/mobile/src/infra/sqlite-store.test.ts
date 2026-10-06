@@ -60,7 +60,7 @@ async function enqueue(ctx: ReturnType<typeof setupWith>, n: number, from = 1): 
 describe("SqliteOutboxStore", () => {
   it("migra el esquema (user_version) y activa WAL", async () => {
     const store = await SqliteOutboxStore.open("a.db");
-    expect(await store.counts()).toEqual({ pending: 0, inFlight: 0, rejected: 0, dead: 0, sent: 0, discarded: 0, invalidLocal: 0 });
+    expect(await store.counts()).toEqual({ pending: 0, inFlight: 0, rejected: 0, dead: 0, sent: 0, discarded: 0, invalidLocal: 0, taskFailures: 0 });
     const { DatabaseSync } = await import("node:sqlite");
     const raw = new DatabaseSync(join(dir, "a.db"));
     expect(raw.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
@@ -105,7 +105,48 @@ describe("SqliteOutboxStore", () => {
     expect(result).toMatchObject({ outcome: "drained", sent: 3 });
   });
 
-  it("dos conexiones (UI y tarea en segundo plano) no reclaman los mismos puntos", async () => {
+  it("dos claim concurrentes sobre la MISMA conexión se serializan (mutex) y no toman los mismos puntos", async () => {
+    const store = await SqliteOutboxStore.open("e2.db");
+    const ctx = setupWith(store);
+    await enqueue(ctx, 10);
+    // Sin el mutex, el segundo BEGIN IMMEDIATE cae dentro de la transacción del primero y SQLite lanza.
+    const [x, y] = await Promise.all([store.claim(6, 1e6, ctx.clock.now), store.claim(6, 1e6, ctx.clock.now)]);
+    const ids = [...x, ...y].map((e) => e.eventId);
+    expect(x).toHaveLength(6);
+    expect(y).toHaveLength(4);
+    expect(new Set(ids).size).toBe(10);
+  });
+
+  it("escrituras variadas en Promise.all sobre la misma conexión no se pisan", async () => {
+    const store = await SqliteOutboxStore.open("e3.db");
+    const ctx = setupWith(store);
+    await Promise.all([
+      ctx.outbox.enqueue(makePoint(1)),
+      store.setMeta("lastError", "x"),
+      store.countTaskFailure(),
+      ctx.outbox.enqueue(makePoint(2)),
+      store.claim(10, 1e6, ctx.clock.now),
+    ]);
+    expect(await store.counts()).toMatchObject({ taskFailures: 1 });
+  });
+
+  it("un 400 deja un solo lote en dead con su payload, pausa, y dead no se recorta", async () => {
+    const ctx = setupWith(await SqliteOutboxStore.open("e4.db"), { maxBatchPoints: 1 });
+    await enqueue(ctx, 3);
+    ctx.transport.push(http(400, { error: { code: "invalid_envelope", message: "x" } }));
+    const result = await ctx.engine.drain();
+    expect(result.outcome).toBe("paused");
+    expect(await ctx.store.counts()).toMatchObject({ pending: 2, dead: 1 });
+    expect(await ctx.store.getMeta("syncPausedReason")).toBe("client_error");
+    const { DatabaseSync } = await import("node:sqlite");
+    const raw = new DatabaseSync(join(dir, "e4.db"));
+    const row = raw.prepare("SELECT payload, reason FROM dead").get() as { payload: string; reason: string };
+    expect(JSON.parse(row.payload)).toHaveLength(1);
+    expect(row.reason).toBe("http_400:invalid_envelope");
+    raw.close();
+  });
+
+  it("la segunda conexión ve lo que reclamó la primera (la exclusión entre procesos la da BEGIN IMMEDIATE)", async () => {
     const a = await SqliteOutboxStore.open("e.db");
     const b = await SqliteOutboxStore.open("e.db");
     const ctx = setupWith(a);

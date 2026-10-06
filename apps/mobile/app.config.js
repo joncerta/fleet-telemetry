@@ -1,10 +1,12 @@
-/* global process, module */
+/* global process, module, require */
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Config de Expo. Es JS (CommonJS) y no app.json porque el HTTP en claro depende del perfil de build.
 //
-// HTTP en claro (Android lo bloquea por defecto): SOLO en desarrollo local. Los perfiles `preview` y `production`
-// de EAS deben definir APP_VARIANT con ese nombre para que el APK/AAB salga sin él. Sin APP_VARIANT (local) se habilita.
-const variant = process.env.APP_VARIANT ?? "development";
-const allowCleartext = variant === "development";
+// HTTP en claro (Android lo bloquea por defecto): SOLO con APP_VARIANT=development. Sin la variable el build es de
+// producción (falla en cerrado). En local hay que definir APP_VARIANT=development (ver .env.example).
+const { resolveVariant, allowsCleartext } = require("./config/variant.cjs");
+const variant = resolveVariant(process.env.APP_VARIANT);
+const allowCleartext = allowsCleartext(variant);
 
 /** @type {import("expo/config").ExpoConfig} */
 module.exports = {

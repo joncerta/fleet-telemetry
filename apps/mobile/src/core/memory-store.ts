@@ -23,6 +23,7 @@ export class MemoryOutboxStore implements OutboxStore {
   #sent = 0;
   #discarded = 0;
   #invalidLocal = 0;
+  #taskFailures = 0;
 
   enqueue(entry: NewOutboxEntry, cap: number): Promise<{ discarded: number }> {
     if (!this.rows.has(entry.eventId)) {
@@ -132,6 +133,11 @@ export class MemoryOutboxStore implements OutboxStore {
     return Promise.resolve();
   }
 
+  countTaskFailure(): Promise<void> {
+    this.#taskFailures++;
+    return Promise.resolve();
+  }
+
   counts(): Promise<QueueCounts> {
     const all = [...this.rows.values()];
     return Promise.resolve({
@@ -142,6 +148,7 @@ export class MemoryOutboxStore implements OutboxStore {
       sent: this.#sent,
       discarded: this.#discarded,
       invalidLocal: this.#invalidLocal,
+      taskFailures: this.#taskFailures,
     });
   }
 
