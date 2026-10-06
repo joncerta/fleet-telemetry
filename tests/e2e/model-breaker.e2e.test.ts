@@ -56,6 +56,7 @@ beforeAll(async () => {
       AGENT_PORT: String(AGENT_PORT),
       AGENT_MODEL_PROVIDER: "anthropic",
       ANTHROPIC_API_KEY: "sk-ant-falsa-e2e",
+      ANTHROPIC_WORKSPACE_ID: "wrkspc_e2eFake",
       ANTHROPIC_BASE_URL: fake.url,
       AGENT_MODEL: "claude-fake",
       AGENT_MODEL_TIMEOUT_MS: "5000",
@@ -117,6 +118,8 @@ describe("circuit breaker del proveedor del modelo (Anthropic falso)", () => {
       const tools = typeof sent === "object" && sent !== null && "tools" in sent && Array.isArray(sent.tools) ? sent.tools : [];
       expect(tools).toHaveLength(3);
       expect(JSON.stringify(tools)).not.toMatch(/tenant|cookie|session|user/i);
+      // El workspace del config llega (por main.ts) al header que recibe el proveedor.
+      expect(fake.requests[0]?.headers["anthropic-workspace-id"]).toBe("wrkspc_e2eFake");
       expect((await healthOf()).body.dependencies.model?.breaker).toBe("closed");
 
       // 2) Proveedor caído (529): cada pregunta falla con 503 y, al llegar al umbral, el circuito se abre y /health lo refleja.

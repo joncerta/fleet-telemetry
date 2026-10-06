@@ -12,6 +12,8 @@ export interface FakeAnthropicRequest {
   path: string;
   /** Cuerpo JSON de la petición (lo que `ChatAnthropic` envió: modelo, mensajes, herramientas). */
   body: unknown;
+  /** Cabeceras de la petición (en minúsculas, como las entrega Node). */
+  headers: IncomingMessage["headers"];
 }
 
 export interface FakeAnthropic {
@@ -48,7 +50,7 @@ export async function startFakeAnthropic(): Promise<FakeAnthropic> {
   const state = { mode: "ok" as FakeAnthropicMode };
   const server: Server = createServer((request, response) => {
     void readBody(request).then((body) => {
-      requests.push({ path: request.url ?? "", body });
+      requests.push({ path: request.url ?? "", body, headers: request.headers });
       if (state.mode === "overloaded") {
         response.writeHead(529, { "content-type": "application/json" });
         response.end(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }));
