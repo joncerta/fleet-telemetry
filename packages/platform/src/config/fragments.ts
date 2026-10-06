@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SESSION_SECRET_MIN_BYTES } from "../security/session-codec.js";
 
 // Fragmentos reutilizables: cada servicio compone su esquema con `z.object({ ...a.shape, ...b.shape })`.
 // Toda variable nueva se documenta también en `.env.example`.
@@ -45,7 +46,17 @@ export const kafkaConfig = z.object({
     .pipe(z.array(broker).min(1)),
 });
 
-export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+/**
+ * Secreto con el que se firma la cookie de sesión (HMAC-SHA256, ver `createSessionCodec`). Lo comparten fleet-api (la emite) y el
+ * agente (la valida): debe ser el mismo en ambos. Al menos 32 bytes (UTF-8); un secreto más corto hace fallar el arranque.
+ */
+export const sessionSecretConfig = z.object({
+  SESSION_SECRET: z.string().refine((value) => Buffer.byteLength(value, "utf8") >= SESSION_SECRET_MIN_BYTES, {
+    error: `SESSION_SECRET debe tener al menos ${SESSION_SECRET_MIN_BYTES} bytes`,
+  }),
+});
+
+export const LOG_LEVELS =["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 export const logConfig = z.object({
