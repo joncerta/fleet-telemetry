@@ -161,6 +161,42 @@ describe("POST /v1/chat", () => {
       expect(made.raw()).not.toMatch(/SECRETO|sk-ant|pregunta sensible/);
     });
 
+    it("un fallo con resumen deja en el log clase, estado, error.type y el tenant de la SESIÓN, sin la causa ni la pregunta", async () => {
+      const cause = new Error("400 This API key is not scoped to a workspace: pregunta sensible");
+      const failure = { causeName: "BadRequestError", causeStatus: 400, causeErrorType: "invalid_request_error", providerMisconfigured: false };
+      const made = await setup({ chat: failing(new AgentFailedError({ cause, failure })) });
+
+      const response = await post(made, { message: "pregunta sensible" }, { cookie: made.sessionCookieOf(NORTE) });
+
+      expect(response.statusCode).toBe(503);
+      const line = made.logged().find((entry) => entry["msg"] === "El agente no pudo responder");
+      expect(line).toMatchObject({ level: "error", errorType: "AgentFailedError", tenantId: NORTE.tenantId, ...failure });
+      expect(made.raw()).not.toMatch(/pregunta sensible|workspace/);
+    });
+
+    it("un AgentFailedError sin resumen (límite de pasos) se loguea sin campos de proveedor", async () => {
+      const made = await setup({ chat: failing(new AgentFailedError()) });
+
+      await post(made, { message: "hola" }, { cookie: made.sessionCookieOf(NORTE) });
+
+      const line = made.logged().find((entry) => entry["msg"] === "El agente no pudo responder");
+      expect(line).toMatchObject({ errorType: "AgentFailedError", tenantId: NORTE.tenantId });
+      expect(line).not.toHaveProperty("causeStatus");
+    });
+
+    it("un 401 del proveedor se loguea con un mensaje propio y providerMisconfigured para alertar", async () => {
+      const failure = { causeName: "AuthenticationError", causeStatus: 401, causeErrorType: "authentication_error", providerMisconfigured: true };
+      const cause = new Error("401 invalid x-api-key sk-ant-SECRETO");
+      const made = await setup({ chat: failing(new AgentFailedError({ cause, failure })) });
+
+      const response = await post(made, { message: "hola" }, { cookie: made.sessionCookieOf(NORTE) });
+
+      expect(response.statusCode).toBe(503);
+      const line = made.logged().find((entry) => entry["msg"] === "El proveedor del modelo rechazó la configuración");
+      expect(line).toMatchObject({ level: "error", tenantId: NORTE.tenantId, ...failure });
+      expect(made.raw()).not.toMatch(/SECRETO|x-api-key/);
+    });
+
     it("un error inesperado responde 500 sin stack ni mensaje", async () => {
       const made = await setup({ chat: failing(new Error("select * from secretos")) });
 

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentCancelledError, AgentFailedError, AgentTimeoutError } from "../application/errors.js";
 import { SYSTEM_PROMPT } from "../application/system-prompt.js";
 import { B1_QUESTION, CONTEXT, makeFleet, makeScriptedAgent } from "../testing/fakes.js";
+import { createChatModel } from "./chat-model.js";
 import { createLangChainChatAgent, delimitQuestion, type ModelUsage } from "./langchain-chat-agent.js";
 import { createGuardedChatModel } from "./guarded-chat-model.js";
 import { ScriptedChatModel } from "./scripted-chat-model.js";
@@ -107,6 +108,65 @@ describe("createLangChainChatAgent", () => {
 
     expect(error).toBeInstanceOf(AgentFailedError);
     expect(error instanceof Error ? error.message : "").not.toMatch(/SECRETO|x-api-key/);
+    expect(error instanceof Error ? error.cause : undefined).toBeInstanceOf(Error);
+    expect(error instanceof Error && error.cause instanceof Error ? error.cause.message : "").toContain("SECRETO");
+    expect(error instanceof AgentFailedError ? error.failure : undefined).toEqual({ causeName: "Error", providerMisconfigured: false });
+  });
+
+  describe("camino completo: createAgent + guard + opossum + ChatAnthropic real con un proveedor falso", () => {
+    const failWith = async (status: number, type: string) => {
+      const model = createChatModel({
+        provider: "anthropic",
+        model: "claude-test",
+        apiKey: "sk-ant-SECRETO",
+        callTimeoutMs: 5_000,
+        maxConcurrency: 2,
+        breaker: { errorThresholdPercentage: 50, volumeThreshold: 5, resetTimeoutMs: 1_000, rollingWindowMs: 10_000 },
+        fetch: () =>
+          Promise.resolve(
+            new Response(JSON.stringify({ type: "error", error: { type, message: "mensaje con la pregunta sensible" } }), {
+              status,
+              headers: { "content-type": "application/json", "request-id": "req_abc123" },
+            }),
+          ),
+      });
+      try {
+        return await agentWith(model)
+          .run({ context: CONTEXT, message: "pregunta sensible" })
+          .then(
+            () => undefined,
+            (caught: unknown) => caught,
+          );
+      } finally {
+        model.shutdown();
+      }
+    };
+
+    it("un 401 authentication_error llega como failure con providerMisconfigured", async () => {
+      const error = await failWith(401, "authentication_error");
+
+      expect(error).toBeInstanceOf(AgentFailedError);
+      expect(error instanceof AgentFailedError ? error.failure : undefined).toEqual({
+        causeName: "AuthenticationError",
+        causeStatus: 401,
+        causeErrorType: "authentication_error",
+        providerRequestId: "req_abc123",
+        providerMisconfigured: true,
+      });
+      expect(JSON.stringify(error instanceof AgentFailedError ? error.failure : {})).not.toMatch(/SECRETO|sensible/);
+    });
+
+    it("un 400 invalid_request_error (el caso real del incidente) llega como failure sin providerMisconfigured", async () => {
+      const error = await failWith(400, "invalid_request_error");
+
+      expect(error).toBeInstanceOf(AgentFailedError);
+      expect(error instanceof AgentFailedError ? error.failure : undefined).toMatchObject({
+        causeName: "BadRequestError",
+        causeStatus: 400,
+        causeErrorType: "invalid_request_error",
+        providerMisconfigured: false,
+      });
+    });
   });
 
   it("superar el límite de pasos es un AgentFailedError y no ejecuta herramientas sin fin", async () => {
