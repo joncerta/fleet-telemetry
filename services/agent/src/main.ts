@@ -51,6 +51,7 @@ const model = createChatModel({
   provider: config.AGENT_MODEL_PROVIDER,
   model: config.AGENT_MODEL,
   apiKey: config.ANTHROPIC_API_KEY,
+  workspaceId: config.ANTHROPIC_WORKSPACE_ID,
   callTimeoutMs: config.AGENT_MODEL_TIMEOUT_MS,
   maxConcurrency: config.AGENT_MODEL_MAX_CONCURRENCY,
   breaker: {

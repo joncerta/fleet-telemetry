@@ -31,6 +31,43 @@ describe("createProviderModel (Anthropic)", () => {
     expect(model instanceof ChatAnthropic ? model.clientOptions.timeout : undefined).toBe(5_000);
   });
 
+  describe("header anthropic-workspace-id", () => {
+    const okResponse = () =>
+      new Response(
+        JSON.stringify({
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          model: "claude-test",
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    const sentHeader = async (workspaceId: string | undefined): Promise<string | null> => {
+      let header: string | null = null;
+      const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+        header = new Headers(init?.headers).get("anthropic-workspace-id");
+        return Promise.resolve(okResponse());
+      });
+      await createProviderModel({ ...SETTINGS, workspaceId, fetch: fetchMock }).invoke([new HumanMessage("hola")]);
+      return header;
+    };
+
+    it("con workspace la petición lleva el header con su valor (y se conserva el timeout)", async () => {
+      expect(await sentHeader("wrkspc_abc123")).toBe("wrkspc_abc123");
+      const model = createProviderModel({ ...SETTINGS, workspaceId: "wrkspc_abc123", fetch: vi.fn<typeof fetch>() });
+      expect(model instanceof ChatAnthropic ? model.clientOptions.timeout : undefined).toBe(5_000);
+    });
+
+    it("sin workspace (ausente o vacío) no envía el header", async () => {
+      expect(await sentHeader(undefined)).toBeNull();
+      expect(await sentHeader("")).toBeNull();
+    });
+  });
+
   it("reintenta UNA vez (no las 6 de LangChain por defecto) ante un 529", async () => {
     const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(overloaded()));
     const model = createProviderModel({ ...SETTINGS, fetch: fetchMock });

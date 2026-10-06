@@ -51,6 +51,27 @@ describe("loadAgentConfig", () => {
     expect(() => loadAgentConfig({ ...valid, AGENT_MODEL_TIMEOUT_MS: "20000", AGENT_TIMEOUT_MS: "45000" })).toThrow(/AGENT_MODEL_TIMEOUT_MS/);
   });
 
+  describe("ANTHROPIC_WORKSPACE_ID", () => {
+    it("es opcional: ausente o vacío = sin workspace", () => {
+      expect(loadAgentConfig(valid).ANTHROPIC_WORKSPACE_ID).toBeUndefined();
+      expect(loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: "" }).ANTHROPIC_WORKSPACE_ID).toBeUndefined();
+      expect(loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: "  " }).ANTHROPIC_WORKSPACE_ID).toBeUndefined();
+    });
+
+    it("acepta el formato wrkspc_<alfanumérico>", () => {
+      expect(loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: "wrkspc_01AbC9" }).ANTHROPIC_WORKSPACE_ID).toBe("wrkspc_01AbC9");
+    });
+
+    it("rechaza un formato inválido nombrando la variable, sin eco del valor", () => {
+      for (const bad of ["abc", "wrkspc_", "wrkspc_a-b", `wrkspc_${"a".repeat(65)}`]) {
+        expect(() => loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: bad })).toThrow(/ANTHROPIC_WORKSPACE_ID/);
+      }
+      // Centinela inválido (lleva "-"): el error nombra la variable y no repite el valor.
+      expect(() => loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: "wrkspc_SENTINEL-x" })).toThrow(/ANTHROPIC_WORKSPACE_ID/);
+      expect(() => loadAgentConfig({ ...valid, ANTHROPIC_WORKSPACE_ID: "wrkspc_SENTINEL-x" })).not.toThrow(/SENTINEL/);
+    });
+  });
+
   describe("ANTHROPIC_API_KEY", () => {
     it("es obligatoria con el proveedor anthropic", () => {
       expect(() => loadAgentConfig({ SESSION_SECRET: valid.SESSION_SECRET })).toThrow(/ANTHROPIC_API_KEY/);
