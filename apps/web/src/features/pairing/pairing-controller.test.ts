@@ -118,7 +118,7 @@ describe("nuevo vehículo", () => {
     expect(api.createVehicle).toHaveBeenCalledWith({ plate: "ABC123", label: null }, expect.any(AbortSignal));
   });
 
-  it.each([["", /Escribe la placa/], ["AB#1", /solo lleva letras y dígitos/], ["A".repeat(33), /solo lleva letras/]])(
+  it.each([["", /Escribe la placa/], ["AB#1", /solo lleva letras y dígitos/], ["A".repeat(33), /La placa admite hasta 32 caracteres/]])(
     "placa inválida %j: se valida antes de enviar y no se llama a la API",
     async (plate, message) => {
       const { controller, api, state } = setup();
@@ -136,31 +136,64 @@ describe("nuevo vehículo", () => {
     expect(api.createVehicle).not.toHaveBeenCalled();
   });
 
-  it("409 plate_taken: 'Ya existe un vehículo con esa placa' y no genera código", async () => {
-    const { controller, api, state } = setup({ createVehicle: vi.fn(() => Promise.reject(apiError(409, PLATE_TAKEN_ERROR_CODE))) });
-    await controller.createAndPair("ABC123", "");
-    expect(state().error).toBe("Ya existe un vehículo con esa placa.");
-    expect(api.createPairingCode).not.toHaveBeenCalled();
+  it("409 plate_taken: recarga el catálogo, deja elegida la placa existente y avisa; no genera código", async () => {
+    const existing = catalogItem({ plate: "ABC123", label: "Ya estaba" });
+    const listVehicles = vi.fn<Api["listVehicles"]>(() => Promise.resolve({ items: [existing], limit: 500 }));
+    const createPairingCode = vi.fn<Api["createPairingCode"]>();
+    const { controller, state } = setup({
+      listVehicles,
+      createPairingCode,
+      createVehicle: vi.fn(() => Promise.reject(apiError(409, PLATE_TAKEN_ERROR_CODE))),
+    });
+    await controller.createAndPair("abc-123", "");
+    expect(listVehicles).toHaveBeenCalledTimes(1);
+    expect(state().suggestedVehicleId).toBe(existing.vehicleId);
+    expect(state().error).toBe("Ya existe un vehículo con esa placa. La seleccionamos para que generes su código.");
+    expect(state().plateError).toBeNull();
+    expect(createPairingCode).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [apiError(429, "rate_limited"), /Demasiadas solicitudes/],
-    [apiError(400, "validation"), /Revisa la placa/],
-    [new UnauthorizedError(), /sesión terminó/],
-    [apiError(500, "boom"), /No se pudo crear el vehículo/],
-  ])("el error de alta se explica con claridad (%#)", async (error, message) => {
-    const { controller, state } = setup({ createVehicle: vi.fn(() => Promise.reject(error)) });
-    await controller.createAndPair("ABC123", "");
-    expect(state().error).toMatch(message);
+  it("409 plate_taken sin la placa en el catálogo recargado: el error queda en el campo placa y no se sugiere nada", async () => {
+    const { controller, state } = setup({ createVehicle: vi.fn(() => Promise.reject(apiError(409, PLATE_TAKEN_ERROR_CODE))) });
+    await controller.createAndPair("ZZZ999", "");
+    expect(state().plateError).toBe("Ya existe un vehículo con esa placa.");
+    expect(state().suggestedVehicleId).toBeNull();
+    expect(state().error).toBeNull();
   });
 
-  it("si el vehículo se crea pero el código falla, lo dice, refresca el catálogo y deja elegido el vehículo para reintentar", async () => {
-    const { controller, api, state } = setup({ createPairingCode: vi.fn(() => Promise.reject(new NetworkError())) });
+  it("400 del servidor va al campo placa; 429, 401 y 5xx son avisos generales", async () => {
+    const run = async (error: unknown) => {
+      const { controller, state } = setup({ createVehicle: vi.fn<Api["createVehicle"]>().mockRejectedValue(error) });
+      await controller.createAndPair("ABC123", "");
+      return state();
+    };
+    expect((await run(apiError(400, "validation"))).plateError).toMatch(/Revisa la placa/);
+    expect((await run(apiError(400, "validation"))).error).toBeNull();
+    expect((await run(apiError(429, "rate_limited"))).error).toMatch(/Demasiadas solicitudes/);
+    expect((await run(new UnauthorizedError())).error).toMatch(/sesión terminó/);
+    expect((await run(apiError(500, "boom"))).error).toMatch(/No se pudo crear el vehículo/);
+  });
+
+  it("el vehículo creado entra al catálogo local y queda sugerido aunque falle el código Y el refresco", async () => {
+    const created = catalogItem({ plate: "ABC123" });
+    const existing = catalogItem({ plate: "ZZZ001" });
+    const listVehicles = vi
+      .fn<Api["listVehicles"]>()
+      .mockResolvedValueOnce({ items: [existing], limit: 500 })
+      .mockRejectedValue(new NetworkError());
+    const { controller, state } = setup({
+      listVehicles,
+      createVehicle: vi.fn(() => Promise.resolve(created)),
+      createPairingCode: vi.fn(() => Promise.reject(new NetworkError())),
+    });
+    await controller.loadCatalog();
     await controller.createAndPair("ABC123", "");
+    await vi.waitFor(() => expect(state().catalog.error).not.toBeNull());
     expect(state().submit).toBe("failed");
     expect(state().error).toMatch(/El vehículo se creó, pero no se pudo generar el código/);
-    expect(state().createdVehicleId).not.toBeNull();
-    expect(api.listVehicles).toHaveBeenCalledTimes(1);
+    expect(state().suggestedVehicleId).toBe(created.vehicleId);
+    // El refresco falló, pero el selector tiene el vehículo (y ordenado por placa).
+    expect(state().catalog.data?.map((item) => item.plate)).toEqual(["ABC123", "ZZZ001"]);
   });
 
   it("al desmontar se cancela lo pendiente y nada se aplica después", async () => {

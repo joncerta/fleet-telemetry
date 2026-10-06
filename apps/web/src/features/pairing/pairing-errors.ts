@@ -1,4 +1,4 @@
-import { PLATE_TAKEN_ERROR_CODE, VEHICLE_LABEL_MAX_LENGTH, vehicleCreateRequestSchema, type VehicleCreateRequest } from "@fleet/contracts";
+import { PLATE_MAX_LENGTH, PLATE_TAKEN_ERROR_CODE, VEHICLE_LABEL_MAX_LENGTH, vehicleCreateRequestSchema, type VehicleCreateRequest } from "@fleet/contracts";
 import { ApiRequestError, InvalidResponseError, NetworkError, UnauthorizedError } from "../../lib/api/http-client";
 
 const RATE_LIMITED = "Demasiadas solicitudes. Espera un momento e inténtalo de nuevo.";
@@ -17,16 +17,27 @@ export function pairingErrorMessage(error: unknown): string {
   return "No se pudo generar el código. Inténtalo de nuevo.";
 }
 
-/** Mensaje para el usuario cuando no se pudo dar de alta el vehículo (`POST /v1/vehicles`). */
-export function vehicleCreateErrorMessage(error: unknown): string {
-  if (error instanceof NetworkError) return NO_CONNECTION;
-  if (error instanceof UnauthorizedError) return SESSION_ENDED;
+export const PLATE_TAKEN_MESSAGE = "Ya existe un vehículo con esa placa.";
+
+export interface VehicleCreateFailure {
+  readonly message: string;
+  /** El mensaje es del campo placa (409 y 400): va en `plateError`, con `aria-invalid` y `aria-describedby`; si no, es un aviso general. */
+  readonly field: "plate" | null;
+  /** 409 `plate_taken`: la placa ya existe en el catálogo. */
+  readonly plateTaken: boolean;
+}
+
+/** Cómo mostrar el fallo del alta (`POST /v1/vehicles`). */
+export function vehicleCreateFailure(error: unknown): VehicleCreateFailure {
+  const general = (message: string): VehicleCreateFailure => ({ message, field: null, plateTaken: false });
+  if (error instanceof NetworkError) return general(NO_CONNECTION);
+  if (error instanceof UnauthorizedError) return general(SESSION_ENDED);
   if (error instanceof ApiRequestError) {
-    if (error.status === 409 && error.code === PLATE_TAKEN_ERROR_CODE) return "Ya existe un vehículo con esa placa.";
-    if (error.status === 429) return RATE_LIMITED;
-    if (error.status === 400) return "Revisa la placa y el nombre: el servidor no los aceptó.";
+    if (error.status === 409 && error.code === PLATE_TAKEN_ERROR_CODE) return { message: PLATE_TAKEN_MESSAGE, field: "plate", plateTaken: true };
+    if (error.status === 429) return general(RATE_LIMITED);
+    if (error.status === 400) return { message: "Revisa la placa y el nombre: el servidor no los aceptó.", field: "plate", plateTaken: false };
   }
-  return "No se pudo crear el vehículo. Inténtalo de nuevo.";
+  return general("No se pudo crear el vehículo. Inténtalo de nuevo.");
 }
 
 /** Mensaje cuando el vehículo SÍ se creó pero no se pudo generar su código (se puede reintentar eligiéndolo en la lista). */
@@ -54,6 +65,8 @@ export function validateVehicleForm(plate: string, label: string): VehicleFormRe
   for (const issue of parsed.error.issues) {
     if (issue.path[0] === "label") {
       labelError ??= `El nombre admite hasta ${String(VEHICLE_LABEL_MAX_LENGTH)} caracteres, sin caracteres de control.`;
+    } else if (issue.code === "too_big") {
+      plateError ??= `La placa admite hasta ${String(PLATE_MAX_LENGTH)} caracteres.`;
     } else {
       plateError ??= plate.trim() === "" ? "Escribe la placa." : "La placa solo lleva letras y dígitos (por ejemplo ABC123).";
     }

@@ -141,6 +141,15 @@ describe("fleet-api", () => {
     expect(calls[0]?.url).toBe(`${BASE}/v1/users?limit=100`);
   });
 
+  it("una respuesta de usuarios que no cumple el contrato se descarta (InvalidResponseError) sin loguear sus valores", async () => {
+    const bad = { userId: "no-es-uuid", name: "Operador Norte", email: "operador@norte.test", createdAt: NOW_ISO };
+    const { api, logs } = setup(() => json(200, { items: [bad] }));
+    await expect(api.listUsers(100)).rejects.toBeInstanceOf(InvalidResponseError);
+    const logged = JSON.stringify(logs);
+    expect(logged).not.toContain("operador@norte.test");
+    expect(logged).not.toContain("Operador Norte");
+  });
+
   it("el logout acepta el 204 sin cuerpo", async () => {
     const { api } = setup(() => new Response(null, { status: 204 }));
     await expect(api.logout()).resolves.toBeUndefined();
