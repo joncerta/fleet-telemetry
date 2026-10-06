@@ -238,6 +238,13 @@ jobs:
 
       # --- Perfil `app` de compose + humo de k6 con su verificación de conteos ---
       # Runner efímero: no hay backlog en Redpanda, así que no hace falta anclar el grupo (anchor-group.mjs).
+      # Con las 6 imágenes el disco quedaba al 94% y Redpanda se marca unhealthy por debajo del 5% libre: se liberan las
+      # herramientas preinstaladas del runner que este job no usa (Android, .NET, Haskell, CodeQL; ~20 GB).
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Start infrastructure
         run: docker compose up -d --wait --wait-timeout 240
 
