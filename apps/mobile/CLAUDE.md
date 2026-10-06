@@ -9,7 +9,7 @@ Estas reglas complementan el `CLAUDE.md` de la raíz. El agente que trabaja aqu�
 ## Parámetros (no inventar otros)
 | Parámetro | Valor |
 |---|---|
-| Captura | cada 5 s o 10 m, lo que ocurra primero, solo con turno activo |
+| Captura | latido cada 5 s con `distanceInterval = 0` (también detenido: el processor calcula la detención con esos puntos), solo con turno activo. Mejora futura: intervalo adaptativo para ahorrar batería |
 | Precisión mínima | 50 m; los puntos peores se guardan marcados como `lowAccuracy`, no se descartan |
 | Lote | hasta 200 puntos o el máximo que defina el contrato, lo que sea menor |
 | Backoff | exponencial con jitter completo, de 1 s a 60 s; se reinicia tras un envío exitoso |
