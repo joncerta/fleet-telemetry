@@ -4,6 +4,7 @@ export {
   databaseConfig,
   databaseReadOnlyConfig,
   migrationConfig,
+  shutdownConfig,
   kafkaConfig,
   logConfig,
   LOG_LEVELS,
@@ -24,6 +25,7 @@ export {
   type FleetSendRecord,
   type ProducerSource,
 } from "./kafka/producer.js";
+export { DEFAULT_MAX_BATCH_BYTES, MESSAGE_OVERHEAD_BYTES, splitBySize } from "./kafka/batching.js";
 export { createAdmin, createConsumer, type AdminSource, type ConsumerSource, type FleetConsumerOptions } from "./kafka/admin-consumer.js";
 export {
   CORRELATION_ID_HEADER,
@@ -42,7 +44,12 @@ export { MigrationError, checksumOf, loadMigrationFiles, type MigrationFile } fr
 export { FLEET_ROLES, scramSha256Verifier, setRolePasswords, type FleetRole, type Queryable, type RolePasswords } from "./migrations/roles.js";
 export { formatMigrationStatus } from "./migrations/format-status.js";
 export { DEFAULT_ROLLBACK_TARGET, parseRollbackArgs, parseRollbackCommand, type RollbackCommand, type RollbackTarget } from "./migrations/rollback-target.js";
-export { assertLocalDatabaseHost, LOCAL_DATABASE_HOSTS } from "./migrations/local-guard.js";
+export {
+  assertLocalDatabaseHost,
+  assertLocalEnvironmentMark,
+  ENVIRONMENT_SETTING,
+  LOCAL_DATABASE_HOSTS,
+} from "./migrations/local-guard.js";
 export { DEFAULT_SESSION_TIMEOUTS, type SessionTimeouts } from "./migrations/control.js";
 export {
   defaultMigrationsDir,
@@ -55,3 +62,13 @@ export {
   type RollbackOptions,
   type RollbackResult,
 } from "./migrations/runner.js";
+
+export { sha256Hex } from "./security/hash.js";
+
+export {
+  installGracefulShutdown,
+  type GracefulShutdown,
+  type GracefulShutdownOptions,
+  type ShutdownEventSource,
+  type ShutdownStep,
+} from "./lifecycle/shutdown.js";

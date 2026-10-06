@@ -23,13 +23,51 @@ export function assertLocalEnvironmentMark(value: string | null | undefined): vo
   const found = value === null || value === undefined || value === "" ? "sin marca" : `marcada como "${value}"`;
   throw new MigrationError(
     `db:rollback solo corre contra una base marcada como local: el servidor debe tener ${ENVIRONMENT_SETTING}=${LOCAL_ENVIRONMENT} ` +
-      `(la base está ${found}). La marca la fija docker-compose.yml en el servidor local; ` +
-      "un down puede destruir datos: en cualquier otro entorno se escribe una migración nueva que corrija el esquema.",
+      `(la base está ${found}). La marca la fija docker-compose.yml en el servidor local: ` +
+      "si el contenedor es anterior a la marca, recrea el contenedor con `docker compose up -d --wait` (sin `-v`: el volumen y los datos se conservan). " +
+      "Un down puede destruir datos: en cualquier otro entorno se escribe una migración nueva que corrija el esquema.",
   );
 }
 
-/** Parámetros de la URL con los que `pg` conectaría a un host distinto del que se ve en el authority. */
+/**
+ * Parámetros de la URL con los que `pg` conectaría a un host distinto del que se ve en el authority.
+ * (`options` tiene su propia guarda, `assertNoConnectionOptions`: no cambia el host, pero sí la sesión.)
+ */
 const HOST_OVERRIDE_PARAMS = ["host", "hostaddr", "service"] as const;
+
+/**
+ * Parámetros de la query tal como los lee `pg`: `pg-connection-string` hace `new URL(str, "postgres://base")` (con
+ * los espacios codificados y un host de relleno si la URL no tiene host) y copia **cada** parámetro a la configuración
+ * de la conexión, donde pisa lo que el código pasó de forma explícita. Si la URL no se puede leer, `pg` fallará igual.
+ */
+function connectionParams(adminUrl: string): URLSearchParams {
+  if (adminUrl.startsWith("/")) return new URLSearchParams();
+  const text = /( |%[^a-f0-9]|%[a-f0-9][^a-f0-9])/i.test(adminUrl) ? encodeURI(adminUrl).replaceAll(/%25(\d\d)/g, "%$1") : adminUrl;
+  for (const candidate of [text, text.replace("@/", "@___DUMMY___/")]) {
+    try {
+      return new URL(candidate, "postgres://base").searchParams;
+    } catch {
+      // se prueba la siguiente forma, como hace `pg`
+    }
+  }
+  return new URLSearchParams();
+}
+
+/**
+ * Falla si `DATABASE_ADMIN_URL` trae `?options=`. `pg` copia ese parámetro a la configuración y **pisa** el `options`
+ * de la sesión de migración, con dos efectos: (1) reemplaza en silencio `lock_timeout`,
+ * `idle_in_transaction_session_timeout`, `timezone` y `default_transaction_read_only` (`status` y `--dry-run` dejarían de
+ * ser de solo lectura); (2) `-c fleet.environment=local` daría la marca local a una base remota a la que llega un túnel,
+ * y la segunda guarda de `db:rollback` quedaría anulada. El mensaje no cita el valor ni las credenciales.
+ */
+export function assertNoConnectionOptions(adminUrl: string): void {
+  if (!connectionParams(adminUrl).has("options")) return;
+  throw new MigrationError(
+    'DATABASE_ADMIN_URL usa el parámetro "options": la sesión de migración fija sus propios parámetros (timezone, lock_timeout, ' +
+      "idle_in_transaction_session_timeout y default_transaction_read_only) y un ?options= de la URL los reemplazaría en silencio. " +
+      "Quítalo de la URL.",
+  );
+}
 
 /**
  * Falla si `DATABASE_ADMIN_URL` no apunta a un host local. Mira el host real con el que conectaría `pg`: un
@@ -42,6 +80,8 @@ export function assertLocalDatabaseHost(adminUrl: string): void {
   } catch {
     throw new MigrationError("DATABASE_ADMIN_URL no es una URL válida: db:rollback solo corre contra una base local.");
   }
+
+  assertNoConnectionOptions(adminUrl);
 
   const override = HOST_OVERRIDE_PARAMS.find((param) => url.searchParams.has(param));
   if (override) {

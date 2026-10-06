@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ConfigError, loadConfig } from "./load-config.js";
-import { databaseAdminConfig, kafkaConfig, logConfig, migrationConfig } from "./fragments.js";
+import { databaseAdminConfig, kafkaConfig, logConfig, migrationConfig, shutdownConfig } from "./fragments.js";
 
 const schema = z.object({ ...databaseAdminConfig.shape, ...kafkaConfig.shape, ...logConfig.shape });
 
@@ -78,5 +78,21 @@ describe("migrationConfig (DB_MIGRATE_LOCK_TIMEOUT_MS)", () => {
 
   it.each(["0", "999", "60001", "abc", "1.5", "-5"])("rechaza %s y nombra la variable", (value) => {
     expect(() => loadConfig(migrationSchema, { DB_MIGRATE_LOCK_TIMEOUT_MS: value })).toThrow(/DB_MIGRATE_LOCK_TIMEOUT_MS/);
+  });
+});
+
+describe("shutdownConfig (SHUTDOWN_TIMEOUT_MS)", () => {
+  const shutdownSchema = z.object({ ...shutdownConfig.shape });
+
+  it("por defecto son 15 s", () => {
+    expect(loadConfig(shutdownSchema, {}).SHUTDOWN_TIMEOUT_MS).toBe(15_000);
+  });
+
+  it("acepta un entero entre 1 y 120 s", () => {
+    expect(loadConfig(shutdownSchema, { SHUTDOWN_TIMEOUT_MS: "30000" }).SHUTDOWN_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it.each(["0", "999", "120001", "abc", "1.5"])("rechaza %s y nombra la variable", (value) => {
+    expect(() => loadConfig(shutdownSchema, { SHUTDOWN_TIMEOUT_MS: value })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
   });
 });
