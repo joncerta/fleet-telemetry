@@ -5,17 +5,20 @@ export interface SseBlock {
   id: string | undefined;
   event: string | undefined;
   data: string | undefined;
+  /** `retry:` del bloque (ms que el navegador espera antes de reconectar). */
+  retry: number | undefined;
   /** Texto de una línea de comentario (`: heartbeat`), sin los dos puntos ni el espacio. */
   comment: string | undefined;
 }
 
 /** Interpreta un bloque (lo que hay entre dos líneas en blanco) según el formato de SSE. */
 export function parseSseBlock(block: string): SseBlock {
-  const parsed: SseBlock = { id: undefined, event: undefined, data: undefined, comment: undefined };
+  const parsed: SseBlock = { id: undefined, event: undefined, data: undefined, retry: undefined, comment: undefined };
   for (const line of block.split("\n")) {
     if (line.startsWith(":")) parsed.comment = line.slice(1).trim();
     else if (line.startsWith("id:")) parsed.id = line.slice(3).trim();
     else if (line.startsWith("event:")) parsed.event = line.slice(6).trim();
+    else if (line.startsWith("retry:")) parsed.retry = Number(line.slice(6).trim());
     else if (line.startsWith("data:")) parsed.data = line.slice(5).trim();
   }
   return parsed;

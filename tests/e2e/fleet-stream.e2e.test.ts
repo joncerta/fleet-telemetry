@@ -205,6 +205,9 @@ describe("GET /v1/stream contra el stack real", () => {
 
       const { block: norteSnapshotBlock, snapshot: norteSnapshot } = await snapshotOf(norteStream);
       expect(norteSnapshotBlock.id).toBe(norteSnapshot.cursor);
+      // El primer frame lleva `retry:` (base 3000 ms + jitter de 0 a 5000 ms por defecto): evita la estampida de reconexiones tras un reinicio.
+      expect(norteSnapshotBlock.retry).toBeGreaterThanOrEqual(3_000);
+      expect(norteSnapshotBlock.retry).toBeLessThan(8_000);
       // Norte no tiene estado ni alertas todavía; nada de Sur en su snapshot.
       expect(norteSnapshot.vehicles.filter((vehicle) => vehicle.vehicleId === norte.vehicleId)).toEqual([]);
       expect(JSON.stringify(norteSnapshot)).not.toContain(sur.vehicleId);
