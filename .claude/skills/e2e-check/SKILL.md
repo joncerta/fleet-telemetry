@@ -19,9 +19,9 @@ Commit: !`git rev-parse --short HEAD` · Cambios sin commitear: !`git status --s
 ## Preparación
 
 - Lee `packages/contracts/src/telemetry.ts` y `packages/contracts/src/fleet.ts` para construir los payloads válidos y conocer la forma del ACK, el snapshot y los eventos SSE.
-- Define un `RUN_ID` (por ejemplo, `e2e-<timestamp>`) y usa **vehículos propios de esta corrida**: `e2e-<RUN_ID>-v1`, `-v2`, etc. Todas las consultas filtran por esos vehículos y por un rango de tiempo reciente. Nunca cuentes sobre la tabla completa.
+- Define un `RUN_ID` (por ejemplo, `e2e-<timestamp>`). Los `vehicleId` son UUID y los vehículos se siembran con `pnpm db:seed`: elige **dos vehículos sembrados del tenant A** (en este documento, `v1` y `v2`) y anota sus filas y alertas previas. Mide **por `eventId` y por diferencia** contra ese estado previo, con un rango de tiempo reciente. Nunca cuentes sobre la tabla completa.
 - **Identidad** (regla 4 de CLAUDE.md): el gateway toma el vehículo y el tenant del token de dispositivo; fleet-api y el agente toman el tenant de la sesión.
-  - Por cada vehículo de prueba (`e2e-<RUN_ID>-v1`, `-v2`), crea el vehículo y su token de dispositivo en el tenant A con el comando local que documente `CLAUDE.md`. Los lotes de cada vehículo se envían con su token.
+  - Por cada vehículo de prueba (`v1`, `v2`), emite su token de dispositivo con `pnpm device:token` (rota el anterior). Los lotes de cada vehículo se envían con su token. **Al terminar, borra los archivos donde guardaste tokens y cookies.**
   - Inicia sesión con el usuario sembrado del tenant A y con el del tenant B, guarda cada cookie en un archivo (`-c <archivo>`) y úsala con `-b <archivo>` en las llamadas a `:4002` y `:4003`.
   - Si el comando de tokens o los usuarios sembrados no existen, los pasos que dependen de ellos son ❌, con el pendiente para `backend-engineer`.
 - Escribe cada `curl` con la URL justo después de `-s` o `-sN` (`curl -s localhost:4002/...`) y los parámetros de consulta con `-G -d`, para que coincidan con los permisos de `settings.json` y no queden `&` sin comillas.
@@ -42,14 +42,14 @@ Commit: !`git rev-parse --short HEAD` · Cambios sin commitear: !`git status --s
 - `curl -s localhost:4001/health`, `:4002/health` y `:4003/health` responden OK.
 - Si no responden, **no los lances tú**: indica al humano que corra `pnpm dev`, marca los pasos dependientes como ⚠️ no verificado y continúa con lo que se pueda.
 
-**3. Ingesta, ACK e idempotencia** (`POST :4001/v1/telemetry/batch`)
+**3. Ingesta, ACK e idempotencia** (`POST :4001/v1/telemetry/batches`)
 
-Lote A, para `e2e-<RUN_ID>-v1` y enviado con su token de dispositivo: 5 puntos válidos únicos, 1 punto duplicado (mismo `eventId` que uno de los 5) y 1 punto que no cumple el esquema. Coordenadas dentro de Colombia.
+Lote A, para `v1` y enviado con su token de dispositivo: 5 puntos válidos únicos, 1 punto duplicado (mismo `eventId` que uno de los 5) y 1 punto que no cumple el esquema. Coordenadas dentro de Colombia.
 - Primer envío. Esperado (regla 7 de CLAUDE.md):
   - el ACK lista los 5 `eventId` válidos en `accepted`;
   - el punto inválido aparece en `rejected` con su motivo;
   - el duplicado dentro del lote no genera dos filas.
-- Polling hasta que `select count(*) from telemetry where vehicle_id = 'e2e-<RUN_ID>-v1' and <columna de tiempo> > now() - interval '15 minutes'` llegue a **5**.
+- Polling hasta que `select count(*) from telemetry where vehicle_id = <v1> and event_id in (<los 5 válidos>) and <columna de tiempo> > now() - interval '15 minutes'` llegue a **5**.
 - Segundo envío del **mismo** lote A. Esperado:
   - el ACK vuelve a listar los 5 válidos en `accepted` (si no, el móvil los reintentaría para siempre);
   - el conteo **sigue en 5**.
@@ -60,28 +60,28 @@ Lote A, para `e2e-<RUN_ID>-v1` y enviado con su token de dispositivo: 5 puntos v
 - **Inválido del processor**: envía 1 punto que pase el gateway pero falle al procesar, con el mecanismo que defina el backend. Esperado: llega a `telemetry.dlq` con su motivo tras los reintentos y no está en la tabla `telemetry`. Si el backend no ofrece cómo provocarlo, marca ⚠️ no verificado y anótalo como pendiente para `backend-engineer`.
 
 **5. Datos geográficos**
-- `select count(*) from telemetry where vehicle_id like 'e2e-<RUN_ID>-%' and not (ST_Y(<columna geo>::geometry) between -4.3 and 13.5 and ST_X(<columna geo>::geometry) between -79.1 and -66.8)` devuelve **0**. Si no, casi seguro hay coordenadas lon/lat invertidas en algún punto del pipeline.
+- `select count(*) from telemetry where vehicle_id in (<v1>, <v2>) and not (ST_Y(<columna geo>::geometry) between -4.3 and 13.5 and ST_X(<columna geo>::geometry) between -79.1 and -66.8)` devuelve **0**. Si no, casi seguro hay coordenadas lon/lat invertidas en algún punto del pipeline.
 
 **6. Estado y alertas**
-- Siembra `e2e-<RUN_ID>-v2` detenido dentro de una zona crítica, con puntos que tengan timestamps de hace más de 2 minutos (así no hay que esperar). Si el backend calcula "detenido" con la hora de llegada y no con la del evento, anótalo como hallazgo.
-- `curl -s localhost:4002/v1/vehicles/stopped -G -d minMinutes=1 -d zoneKind=critical -b <cookie-A>`. Esperado: incluye `e2e-<RUN_ID>-v2` y no incluye `e2e-<RUN_ID>-v1`.
-- `curl -s localhost:4002/v1/alerts -b <cookie-A>`. Esperado: hay una alerta para `e2e-<RUN_ID>-v2`, y solo una.
+- Siembra `v2` detenido dentro de una zona crítica, con puntos cuyo fix GPS cubra **más de `ALERT_CRITICAL_STOP_MINUTES`** (20 min por defecto) hasta hace pocos minutos, para que salte la alerta sin esperar. Si el backend calcula "detenido" con la hora de llegada y no con la del evento, anótalo como hallazgo.
+- `curl -s localhost:4002/v1/vehicles/stopped -G -d minMinutes=1 -d zoneKind=critical -b <cookie-A>`. Esperado: incluye `v2` y no incluye `v1`.
+- `curl -s localhost:4002/v1/alerts -b <cookie-A>`. Esperado: hay una alerta para `v2`, y solo una.
 
 **7. SSE**
 - `timeout 5 curl -sN localhost:4002/v1/stream -b <cookie-A> | head -5`. Esperado: `event: snapshot`.
-- Con el stream abierto (`timeout 20 curl -sN ... > /tmp/sse-<RUN_ID>.log &`), envía un punto nuevo de `e2e-<RUN_ID>-v1`. Esperado:
+- Con el stream abierto (`timeout 20 curl -sN ... > /tmp/sse-<RUN_ID>.log &`), envía un punto nuevo de `v1`. Esperado:
   - llega un evento con ese vehículo y con línea `id:`;
   - aparece al menos un heartbeat en el intervalo configurado.
 
 **8. Multi-tenant**
-- Con la cookie del tenant B, consulta vehículos y alertas, abre el SSE y pregunta al agente por `e2e-<RUN_ID>-v2`. Esperado: **ningún** dato de los vehículos del tenant A.
+- Con la cookie del tenant B, consulta vehículos y alertas, abre el SSE y pregunta al agente por `v2`. Esperado: **ningún** dato de los vehículos del tenant A.
 - Sin cookie, las mismas llamadas a `:4002` y `:4003` responden `401`.
 - Este paso es obligatorio desde el cierre de la fase 1. Si la autenticación no existe o se filtra cualquier dato del tenant A, es ❌.
 
-**9. Agente IA** (`POST :4003/v1/agent/chat`)
+**9. Agente IA** (`POST :4003/v1/chat`)
 - Pregunta: "¿Qué vehículos llevan detenidos más de 1 minuto en zonas críticas?". Esperado:
   - `toolCalls` incluye `get_stopped_vehicles`;
-  - la respuesta menciona `e2e-<RUN_ID>-v2`.
+  - la respuesta menciona `v2`.
 - El LLM no es determinista: si falla, reintenta una vez. Si pasa en el segundo intento, es ⚠️ flaky.
 
 **10. Circuit breaker** (omitir con `sin-breaker`)
@@ -96,6 +96,8 @@ Lote A, para `e2e-<RUN_ID>-v1` y enviado con su token de dispositivo: 5 puntos v
 - `pnpm turbo run typecheck test`. Esperado: sin fallos.
 - `pnpm test:integration`. Esperado: sin fallos.
 - `pnpm test:e2e` (backend) y Playwright de la web, si ya existe. Esperado: sin fallos, sin tests saltados.
+  - Si el stack corre con `--profile app`, el arnés comparte Redpanda con el contenedor `processor` y los dos procesarían los mensajes del test. Detenlo durante la suite (`docker compose stop processor`) y vuelve a levantarlo al terminar (`docker compose start processor`).
+  - Turbo corre con `--concurrency=1`: si falla Playwright, no llega a `@fleet/e2e`. En ese caso, corre `tests/e2e` por separado.
 - Cada flujo verificado a mano en esta skill tiene su test e2e automatizado. Si alguno no lo tiene, es ❌: anótalo como pendiente para el agente del área.
 
 ## Preparación para grabar (solo con `video`)
