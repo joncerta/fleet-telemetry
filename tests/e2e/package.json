@@ -13,6 +13,7 @@
     "@fleet/platform": "workspace:*"
   },
   "devDependencies": {
+    "@fleet/agent": "workspace:*",
     "@fleet/contracts": "workspace:*",
     "@fleet/eslint-config": "workspace:*",
     "@fleet/fleet-api": "workspace:*",
