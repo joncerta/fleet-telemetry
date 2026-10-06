@@ -17,6 +17,11 @@ import { AGENT_URL, E2E_AGENT_PORT, E2E_FLEET_API_PORT, E2E_GATEWAY_PORT, E2E_HO
 /** Fallos hacia fleet-api con los que el breaker del agente se abre en el e2e, y tiempo que se queda abierto antes de probar de nuevo. */
 export const E2E_AGENT_BREAKER_VOLUME_THRESHOLD = 3;
 const E2E_AGENT_BREAKER_RESET_TIMEOUT_MS = 30_000;
+/**
+ * Ventana en la que el breaker del agente cuenta los fallos. Con la de por defecto (10 s) el e2e del chat no abre el circuito: pregunta cada
+ * ~6 s (la pregunta y hasta 5 s de espera del texto), así que nunca hay 3 fallos dentro de la ventana. Con 60 s los 3 fallos del test lo abren.
+ */
+const E2E_AGENT_BREAKER_ROLLING_WINDOW_MS = 60_000;
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const LOGS_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", ".logs");
@@ -144,6 +149,7 @@ export async function startStack(env: E2eEnv): Promise<E2eStack> {
     AGENT_FLEET_API_TIMEOUT_MS: "2000",
     AGENT_BREAKER_VOLUME_THRESHOLD: String(E2E_AGENT_BREAKER_VOLUME_THRESHOLD),
     AGENT_BREAKER_RESET_TIMEOUT_MS: String(E2E_AGENT_BREAKER_RESET_TIMEOUT_MS),
+    AGENT_BREAKER_ROLLING_WINDOW_MS: String(E2E_AGENT_BREAKER_ROLLING_WINDOW_MS),
   };
 
   // El grupo del processor se ancla al final de `telemetry.raw` ANTES de arrancarlo: solo procesa lo que el e2e envíe.
