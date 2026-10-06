@@ -79,7 +79,47 @@ describe("createChatController", () => {
     void controller.ask("pregunta");
     fake.last().respond(jsonResponse(429, { error: { code: "rate_limited", message: "x" } }, { "retry-after": "30" }));
     await flush();
-    expect(state().failure).toMatchObject({ rateLimited: true, message: "Alcanzaste el límite de preguntas. Inténtalo de nuevo en 30 s." });
+    expect(state().failure).toMatchObject({
+      rateLimited: true,
+      retryAfterSeconds: 30,
+      message: "Alcanzaste el límite de preguntas. Inténtalo de nuevo en 30 s.",
+    });
+  });
+
+  it("con 429 no se ofrece reintentar al instante: retry no repite la pregunta", async () => {
+    const { fake, controller, state } = setup();
+    void controller.ask("pregunta");
+    fake.last().respond(jsonResponse(429, { error: { code: "rate_limited", message: "x" } }));
+    await flush();
+    expect(state().failure).toMatchObject({ retryable: false, rateLimited: true, retryAfterSeconds: null });
+    void controller.retry();
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("si el agente cae (sin red o 5xx), el breaker pasa a 'unknown'; un 429 no lo toca", async () => {
+    const { fake, controller, state } = setup();
+    void controller.ask("pregunta");
+    fake.last().respond(jsonResponse(200, chatResponse({ breaker: { state: "closed" } })));
+    await flush();
+    expect(state().breaker).toBe("closed");
+
+    void controller.ask("otra");
+    fake.last().respond(jsonResponse(429, { error: { code: "rate_limited", message: "x" } }));
+    await flush();
+    expect(state().breaker).toBe("closed");
+
+    void controller.ask("otra");
+    fake.last().fail(new TypeError("Failed to fetch"));
+    await flush();
+    expect(state()).toMatchObject({ status: "failed", breaker: "unknown" });
+
+    void controller.ask("otra");
+    fake.last().respond(jsonResponse(200, chatResponse({ breaker: { state: "halfOpen" } })));
+    await flush();
+    void controller.ask("otra");
+    fake.last().respond(jsonResponse(503, { error: { code: "agent_unavailable", message: "x" } }));
+    await flush();
+    expect(state().breaker).toBe("unknown");
   });
 
   it("503 agent_unavailable y sin conexión son errores con reintento", async () => {
@@ -106,7 +146,7 @@ describe("createChatController", () => {
     expect(fake.calls).toHaveLength(1);
   });
 
-  it("al abrir, /health trae el breaker (también con el 503); si /health falla, no inventa un estado", async () => {
+  it("al abrir, /health trae el breaker (también con el 503); si /health falla, pasa a 'unknown' en vez de conservar el último", async () => {
     const { fake, controller, state } = setup();
     void controller.refreshHealth();
     fake.last().respond(jsonResponse(503, agentHealth("open")));
@@ -116,6 +156,17 @@ describe("createChatController", () => {
     void controller.refreshHealth();
     fake.last().fail(new TypeError("Failed to fetch"));
     await flush();
-    expect(state().breaker).toBe("open");
+    expect(state().breaker).toBe("unknown");
+  });
+
+  it("una consulta de salud cancelada (cerrar el chat) no cambia el breaker", async () => {
+    const { fake, controller, state } = setup();
+    void controller.refreshHealth();
+    fake.last().respond(jsonResponse(200, agentHealth("closed")));
+    await flush();
+    void controller.refreshHealth();
+    controller.dispose();
+    await flush();
+    expect(state().breaker).toBe("closed");
   });
 });

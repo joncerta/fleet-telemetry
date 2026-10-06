@@ -52,6 +52,7 @@ describe("ChatPanel", () => {
     expect(render({ breaker: "open" })).toContain("Datos de la flota no disponibles");
     expect(render({ breaker: "closed" })).toContain("Datos de la flota disponibles.");
     expect(render({ breaker: null })).not.toContain("Datos de la flota");
+    expect(render({ breaker: "unknown" })).toContain("Estado de los datos de la flota desconocido.");
   });
 
   it("estados: escribiendo (con cancelar), respuesta vacía y error con reintento", () => {
@@ -59,10 +60,16 @@ describe("ChatPanel", () => {
     expect(render({ status: "sending", question: "hola" })).toContain("Cancelar");
     expect(render({ status: "answered", response: chatResponse({ answer: "  " }) })).toContain("El asistente no devolvió una respuesta.");
 
-    const failed = render({ status: "failed", failure: { message: "El asistente tardó demasiado en responder.", retryable: true, rateLimited: false } });
+    const failed = render({ status: "failed", failure: { message: "El asistente tardó demasiado en responder.", retryable: true, rateLimited: false, retryAfterSeconds: null } });
     expect(failed).toContain("El asistente tardó demasiado en responder.");
     expect(failed).toContain("Reintentar");
-    const notRetryable = render({ status: "failed", failure: { message: "Tu sesión venció.", retryable: false, rateLimited: false } });
+    const notRetryable = render({ status: "failed", failure: { message: "Tu sesión venció.", retryable: false, rateLimited: false, retryAfterSeconds: null } });
     expect(notRetryable).not.toContain("Reintentar");
+    const limited = render({
+      status: "failed",
+      failure: { message: "Alcanzaste el límite de preguntas. Inténtalo de nuevo en 30 s.", retryable: false, rateLimited: true, retryAfterSeconds: 30 },
+    });
+    expect(limited).toContain("Alcanzaste el límite de preguntas");
+    expect(limited).not.toContain("Reintentar");
   });
 });

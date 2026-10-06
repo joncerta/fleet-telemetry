@@ -1,7 +1,7 @@
 import type { ChatResponseTolerant } from "@fleet/contracts";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { AgentApi } from "../../lib/api/agent-api";
-import { chatFailureOf, type ChatFailure } from "./chat-errors";
+import { chatFailureOf, isAgentUnreachable, type ChatFailure } from "./chat-errors";
 
 export type BreakerStateView = ChatResponseTolerant["breaker"]["state"];
 
@@ -24,7 +24,7 @@ export interface ChatController {
   retry(): Promise<void>;
   /** Cancela la pregunta en curso (al cerrar el chat). */
   cancel(): void;
-  /** Consulta el breaker en `/health` (al abrir el chat). Un fallo aquí no es un error del chat: el breaker queda como estaba. */
+  /** Consulta el breaker en `/health` (al abrir el chat). Un fallo aquí no es un error del chat: el breaker pasa a `unknown` ("desconocido"), nunca conserva el último. */
   refreshHealth(): Promise<void>;
   /** Cancela todo lo pendiente (al desmontar). */
   dispose(): void;
@@ -61,7 +61,8 @@ export function createChatController(api: Pick<AgentApi, "ask" | "getHealth">): 
     } catch (error) {
       // Cancelada (otra pregunta, cerrar el chat, desmontar): no es un fallo que mostrar.
       if (current !== request || isAbort(error)) return;
-      store.setState({ status: "failed", failure: chatFailureOf(error) });
+      // Si el agente no respondió, no se conserva el estado anterior del breaker: ya no se sabe.
+      store.setState({ status: "failed", failure: chatFailureOf(error), ...(isAgentUnreachable(error) && { breaker: "unknown" as const }) });
     } finally {
       if (current === request) current = null;
     }
@@ -87,8 +88,9 @@ export function createChatController(api: Pick<AgentApi, "ask" | "getHealth">): 
       try {
         const result = await api.getHealth(request.signal);
         if (health === request) store.setState({ breaker: result.dependencies.fleetApi.breaker });
-      } catch {
-        // Sin respuesta de /health: no se inventa un estado; la próxima respuesta del chat lo traerá.
+      } catch (error) {
+        // Cancelada (otra consulta o cerrar el chat): no dice nada del agente. Sin respuesta de /health: el último estado ya no es de fiar.
+        if (health === request && !isAbort(error)) store.setState({ breaker: "unknown" });
       } finally {
         if (health === request) health = null;
       }
