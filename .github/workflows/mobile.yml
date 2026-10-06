@@ -1,0 +1,246 @@
+name: Mobile
+
+# CI/CD de la app del conductor (apps/mobile). Aparte de ci.yml: solo corre si cambia el móvil o los contratos que consume.
+#  - verify: typecheck, lint y tests del móvil en cada PR y push a develop/master.
+#  - eas-gate + build: `eas build` (EAS, firma remota) SOLO en push a develop/master o workflow_dispatch, y SOLO con el secreto
+#    EXPO_TOKEN. Sin él, el build se salta de forma visible (warning, resumen del run y job "skipped"), nunca en silencio.
+#  - publish-internal: Fastlane sube el AAB al track INTERNO de Play. Solo workflow_dispatch + aprobación del environment
+#    `play-internal`. La promoción a producción es manual, en la consola de Play.
+# Nada de esto publica en un PR. Los checks `verify` de este workflow NO son obligatorios en la protección de ramas (solo corre
+# con cambios en el móvil): si se quisiera exigirlo habría que quitar el filtro `paths`.
+#
+# Lo que el humano debe crear (ver apps/mobile/CLAUDE.md, "CI/CD"):
+#   Secreto de repositorio  EXPO_TOKEN
+#   Environment `play-internal` (revisores requeridos; ramas permitidas: develop y master) con el secreto PLAY_SERVICE_ACCOUNT_JSON
+#   Variables de EAS (entornos `preview` y `production`): EXPO_PUBLIC_INGEST_URL y EXPO_PUBLIC_FLEET_API_URL, ambas https://
+on:
+  pull_request:
+    branches: [develop, master]
+    paths:
+      - "apps/mobile/**"
+      - "packages/contracts/**"
+      - ".github/workflows/mobile.yml"
+  push:
+    branches: [develop, master]
+    paths:
+      - "apps/mobile/**"
+      - "packages/contracts/**"
+      - ".github/workflows/mobile.yml"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Perfil de EAS a construir"
+        type: choice
+        options: [preview, production]
+        default: preview
+      publish_internal:
+        description: "Subir el AAB al track interno de Play con Fastlane (solo perfil production; pide aprobación)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.workflow }}-${{ github.ref }}
+  # Solo se cancelan corridas de PR; un build o una publicación en curso no se interrumpe.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: mobile-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # El móvil importa @fleet/contracts ya compilado (las dependencias del paquete, no el móvil).
+      - name: Build contracts
+        run: pnpm --filter "@fleet/mobile^..." build
+
+      - name: Typecheck
+        run: pnpm --filter @fleet/mobile typecheck
+
+      - name: Lint
+        run: pnpm --filter @fleet/mobile lint
+
+      - name: Unit tests
+        run: pnpm --filter @fleet/mobile test
+
+  # Decide si hay credenciales para construir. Un secreto no se puede evaluar en el `if` de un job: se pasa por env y se publica un
+  # booleano (el valor nunca se imprime).
+  eas-gate:
+    name: eas-gate
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/master'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has_token: ${{ steps.check.outputs.has_token }}
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - name: Check EXPO_TOKEN
+        id: check
+        run: |
+          if [ -n "$EXPO_TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+            echo "EXPO_TOKEN presente: se construye con EAS." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Build de EAS omitido::El secreto EXPO_TOKEN no esta definido: no se construye ni se publica nada."
+            {
+              echo "## Build de EAS OMITIDO"
+              echo "El secreto de repositorio \`EXPO_TOKEN\` no esta definido. Crealo (Settings, Secrets and variables, Actions) y vuelve a correr el workflow."
+              echo "Los jobs \`mobile-build\` y \`publish-internal\` quedan en \`skipped\` a proposito."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  build:
+    name: mobile-build
+    needs: [verify, eas-gate]
+    if: needs.eas-gate.outputs.has_token == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      build_id: ${{ steps.build.outputs.build_id }}
+      profile: ${{ steps.profile.outputs.profile }}
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      # Entradas del usuario por env, nunca interpoladas dentro del script.
+      INPUT_PROFILE: ${{ inputs.profile }}
+      EVENT_NAME: ${{ github.event_name }}
+      REF_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      # eas-cli lee app.config.js y resuelve los config plugins en local antes de subir el proyecto.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9.0.0
+        with:
+          eas-version: 24.11.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      # develop -> preview (APK interno); master -> production (AAB). En workflow_dispatch manda el input.
+      - name: Resolve profile
+        id: profile
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            profile="$INPUT_PROFILE"
+          elif [ "$REF_NAME" = "master" ]; then
+            profile="production"
+          else
+            profile="preview"
+          fi
+          case "$profile" in preview|production) ;; *) echo "Perfil no permitido: $profile"; exit 1 ;; esac
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "Perfil de EAS: $profile"
+
+      # --non-interactive: sin preguntas; la firma de Android la gestiona EAS (credenciales remotas), nunca el repo.
+      # El perfil `production` incrementa el versionCode en EAS (autoIncrement + appVersionSource remote).
+      - name: EAS build
+        id: build
+        working-directory: apps/mobile
+        env:
+          PROFILE: ${{ steps.profile.outputs.profile }}
+        run: |
+          eas build --platform android --profile "$PROFILE" --non-interactive --wait --json > "$RUNNER_TEMP/eas-build.json"
+          build_id="$(jq -r '.[0].id' "$RUNNER_TEMP/eas-build.json")"
+          status="$(jq -r '.[0].status' "$RUNNER_TEMP/eas-build.json")"
+          echo "Build $build_id: $status"
+          [ "$status" = "FINISHED" ] || exit 1
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+
+  publish-internal:
+    name: publish-internal
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_internal && needs.build.outputs.profile == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Environment protegido: el job queda en espera hasta que un revisor lo apruebe. Aquí vive el secreto de Play.
+    environment: play-internal
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      BUILD_ID: ${{ needs.build.outputs.build_id }}
+      # Fastlane (supply) lee la cuenta de servicio de esta variable; no se escribe a disco.
+      SUPPLY_JSON_KEY_DATA: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Mask Play credentials
+        run: |
+          if [ -z "$SUPPLY_JSON_KEY_DATA" ]; then
+            echo "::error title=Falta PLAY_SERVICE_ACCOUNT_JSON::Define el secreto en el environment play-internal."
+            exit 1
+          fi
+          echo "::add-mask::$SUPPLY_JSON_KEY_DATA"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@eab7a230208c952974db8c3245cfd78402c7b385 # v9.0.0
+        with:
+          eas-version: 24.11.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      # Descarga el AAB del build que acaba de terminar (mismo binario que se probó; no se reconstruye).
+      - name: Download AAB from EAS
+        working-directory: apps/mobile
+        run: |
+          url="$(eas build:view "$BUILD_ID" --json | jq -r '.artifacts.buildUrl')"
+          [ -n "$url" ] && [ "$url" != "null" ] || { echo "El build $BUILD_ID no tiene artefacto"; exit 1; }
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/app.aab" "$url"
+          echo "ANDROID_AAB_PATH=$RUNNER_TEMP/app.aab" >> "$GITHUB_ENV"
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        with:
+          ruby-version: "3.3"
+          working-directory: apps/mobile
+
+      - name: Install Fastlane
+        working-directory: apps/mobile
+        run: bundle install
+
+      # Solo track interno, en borrador (ver apps/mobile/fastlane/Fastfile). La promoción a producción es manual en la consola de Play.
+      - name: Upload to Play internal track
+        working-directory: apps/mobile
+        run: bundle exec fastlane android internal
