@@ -10,6 +10,9 @@ const config: NextConfig = {
   poweredByHeader: false,
   // El e2e compila con su propia URL de la API (las `NEXT_PUBLIC_*` se fijan al compilar): usa otra carpeta para no pisar el build normal.
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
+  // La imagen Docker compila con NEXT_OUTPUT=standalone (server.js autocontenido). Fuera de la imagen no se activa: `next start`
+  // (dev y e2e) no funciona con esa salida.
+  ...(process.env.NEXT_OUTPUT === "standalone" ? { output: "standalone" as const } : {}),
   turbopack: { root: repoRoot },
   outputFileTracingRoot: repoRoot,
   headers() {
