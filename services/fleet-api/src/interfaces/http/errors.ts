@@ -1,6 +1,15 @@
-import { PLATE_TAKEN_ERROR_CODE, type ApiError } from "@fleet/contracts";
+import { INVALID_GEOMETRY_ERROR_CODE, PLATE_TAKEN_ERROR_CODE, ZONE_NAME_TAKEN_ERROR_CODE, type ApiError } from "@fleet/contracts";
 import { hasZodFastifySchemaValidationErrors, isResponseSerializationError } from "fastify-type-provider-zod";
-import { InvalidCredentialsError, InvalidPairingCodeError, PlateTakenError, ServerDrainingError, SessionInvalidError, VehicleNotFoundError } from "../../application/errors.js";
+import {
+  InvalidCredentialsError,
+  InvalidPairingCodeError,
+  InvalidZoneGeometryError,
+  PlateTakenError,
+  ServerDrainingError,
+  SessionInvalidError,
+  VehicleNotFoundError,
+  ZoneNameTakenError,
+} from "../../application/errors.js";
 import { InvalidCursorError } from "./alert-cursor.js";
 
 export interface MappedError {
@@ -63,6 +72,8 @@ function codeOf(error: unknown): string | undefined {
  * - credenciales inválidas o sesión que ya no vale -> `401 unauthorized` (el mismo, sin distinguir el motivo);
  * - vehículo ajeno o inexistente -> `404 not_found`;
  * - placa ya existente en el tenant -> `409 plate_taken` (sin la placa en el mensaje);
+ * - nombre de zona ya existente en el tenant -> `409 zone_name_taken` (sin el nombre en el mensaje);
+ * - polígono que PostGIS considera inválido -> `400 invalid_geometry`;
  * - réplica apagándose (sin streams nuevos) -> `503 shutting_down` con `Retry-After`;
  * - código de vinculación inexistente, usado o vencido -> `404 invalid_pairing_code` (el mismo para los tres);
  * - errores de Fastify con código conocido o estado 4xx -> su código de API;
@@ -75,6 +86,8 @@ export function mapError(error: unknown): MappedError {
   if (error instanceof InvalidCredentialsError || error instanceof SessionInvalidError) return UNAUTHORIZED();
   if (error instanceof VehicleNotFoundError) return NOT_FOUND();
   if (error instanceof PlateTakenError) return apiError(409, PLATE_TAKEN_ERROR_CODE, "Ya existe un vehículo con esa placa.");
+  if (error instanceof ZoneNameTakenError) return apiError(409, ZONE_NAME_TAKEN_ERROR_CODE, "Ya existe una zona con ese nombre.");
+  if (error instanceof InvalidZoneGeometryError) return apiError(400, INVALID_GEOMETRY_ERROR_CODE, "El polígono no es válido (por ejemplo, se cruza consigo mismo).");
   if (error instanceof ServerDrainingError) {
     return { ...apiError(503, "shutting_down", "El servidor se está reiniciando. Reintenta en unos segundos."), headers: { "retry-after": String(DRAINING_RETRY_AFTER_SECONDS) } };
   }
