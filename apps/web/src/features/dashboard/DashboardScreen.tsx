@@ -9,6 +9,7 @@ import { FleetMapPanel } from "../map/FleetMapPanel";
 import { PairingPanel } from "../pairing/PairingPanel";
 import { StoppedPanel } from "../stopped/StoppedPanel";
 import { KpiPanel } from "../summary/KpiPanel";
+import { UsersPanel } from "../users/UsersPanel";
 import { VehiclesPanel } from "../vehicles/VehiclesPanel";
 import { DashboardHeader } from "./DashboardHeader";
 
@@ -40,6 +41,7 @@ function Dashboard() {
           <StoppedPanel />
           <VehiclesPanel />
           <PairingPanel />
+          <UsersPanel />
         </aside>
       </div>
       <ChatDock />
