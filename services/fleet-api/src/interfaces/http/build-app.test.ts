@@ -1,5 +1,5 @@
-import { apiErrorSchema, healthResponseSchema, type HealthResponse } from "@fleet/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { apiErrorSchema, healthResponseSchema, livenessResponseSchema, type HealthResponse } from "@fleet/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ALLOWED_ORIGIN, makeTestApp, type TestAppOptions } from "../../testing/test-app.js";
 import { type FleetApiApp } from "./build-app.js";
@@ -62,6 +62,25 @@ describe("GET /health", () => {
     const { app } = await makeApp({ app: { rateLimit: { max: 1, timeWindowMs: 60_000 } } });
 
     for (let i = 0; i < 5; i++) expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
+  });
+});
+
+describe("GET /health/live", () => {
+  it("responde 200 { status: ok } aunque la base y Kafka caigan, sin consultar las dependencias", async () => {
+    const checkHealth = vi.fn(() => Promise.reject(new Error("connection refused")));
+    const { app } = await makeApp({ app: { checkHealth } });
+
+    const response = await app.inject({ method: "GET", url: "/health/live" });
+
+    expect(response.statusCode).toBe(200);
+    expect(livenessResponseSchema.parse(response.json())).toEqual({ status: "ok" });
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
+
+  it("no cuenta para el rate limit", async () => {
+    const { app } = await makeApp({ app: { rateLimit: { max: 1, timeWindowMs: 60_000 } } });
+
+    for (let i = 0; i < 5; i++) expect((await app.inject({ method: "GET", url: "/health/live" })).statusCode).toBe(200);
   });
 });
 

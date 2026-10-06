@@ -2,7 +2,7 @@
 
 - **Estado:** aceptado
 - **Fecha:** 2026-10-06
-- **Alcance:** `services/fleet-api` (:4002) sin el SSE (paso siguiente), el códec de sesión de `@fleet/platform` y la migración 008. Usa los contratos y las migraciones 005/006 de los ADR-006 y ADR-007 sin cambiarlos. La 007 sigue reservada (continuous aggregate, paso S3).
+- **Alcance:** `services/fleet-api` (:4002) sin el SSE (ver ADR-009), el códec de sesión de `@fleet/platform` y la migración 008. Usa los contratos y las migraciones 005/006 de los ADR-006 y ADR-007 sin cambiarlos. La 007 sigue reservada (continuous aggregate, paso S3).
 
 ## Decisiones
 
