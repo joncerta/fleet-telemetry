@@ -62,6 +62,48 @@ describe("loadProcessorConfig", () => {
     expect(() => loadProcessorConfig({ ...valid, [name]: value })).toThrow(new RegExp(name));
   });
 
+  it("los umbrales de detención y de la alerta crítica y el timeout de eventos tienen valores por defecto documentados", () => {
+    expect(loadProcessorConfig(valid)).toMatchObject({
+      ALERT_CRITICAL_STOP_MINUTES: 20,
+      STOP_SPEED_THRESHOLD_MPS: 0.5,
+      STOP_DISPLACEMENT_THRESHOLD_M: 15,
+      PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS: 8_000,
+    });
+  });
+
+  it("los umbrales de detención y de la alerta crítica son configurables", () => {
+    const config = loadProcessorConfig({
+      ...valid,
+      ALERT_CRITICAL_STOP_MINUTES: "30",
+      STOP_SPEED_THRESHOLD_MPS: "1.2",
+      STOP_DISPLACEMENT_THRESHOLD_M: "25.5",
+      PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS: "2000",
+    });
+
+    expect(config).toMatchObject({
+      ALERT_CRITICAL_STOP_MINUTES: 30,
+      STOP_SPEED_THRESHOLD_MPS: 1.2,
+      STOP_DISPLACEMENT_THRESHOLD_M: 25.5,
+      PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS: 2_000,
+    });
+  });
+
+  it.each([
+    ["ALERT_CRITICAL_STOP_MINUTES", "0"],
+    ["ALERT_CRITICAL_STOP_MINUTES", "1441"],
+    ["ALERT_CRITICAL_STOP_MINUTES", "20.5"],
+    ["ALERT_CRITICAL_STOP_MINUTES", "veinte"],
+    ["STOP_SPEED_THRESHOLD_MPS", "0"],
+    ["STOP_SPEED_THRESHOLD_MPS", "-1"],
+    ["STOP_SPEED_THRESHOLD_MPS", "11"],
+    ["STOP_DISPLACEMENT_THRESHOLD_M", "0"],
+    ["STOP_DISPLACEMENT_THRESHOLD_M", "1001"],
+    ["PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS", "499"],
+    ["PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS", "60001"],
+  ])("rechaza %s=%s nombrando la variable", (name, value) => {
+    expect(() => loadProcessorConfig({ ...valid, [name]: value })).toThrow(new RegExp(name));
+  });
+
   it("acepta el tramo máximo (1000)", () => {
     expect(loadProcessorConfig({ ...valid, PROCESSOR_INSERT_CHUNK_SIZE: "1000" }).PROCESSOR_INSERT_CHUNK_SIZE).toBe(1_000);
   });
