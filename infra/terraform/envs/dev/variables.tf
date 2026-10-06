@@ -93,3 +93,30 @@ variable "processor_consumer_group" {
   type        = string
   default     = "processor"
 }
+
+variable "fleet_api_desired_count" {
+  description = "Réplicas de fleet-api. En el primer despliegue va en 0 junto con el gateway y el processor (ver el README, orden de despliegue)."
+  type        = number
+  default     = 1
+}
+
+variable "fleet_api_cors_origins" {
+  description = "Orígenes de la web autorizados a llamar a fleet-api con la cookie de sesión (https://host[:puerto], sin ruta ni comodín). Decisión pendiente: depende del dominio de la web."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.fleet_api_cors_origins) >= 1 && alltrue([for origin in var.fleet_api_cors_origins : can(regex("^https://[^/*]+$", origin))])
+    error_message = "Cada origen debe ser https://host[:puerto], sin ruta ni comodín."
+  }
+}
+
+variable "credentials_version" {
+  description = "Versión de las credenciales generadas (contraseñas de la base y SESSION_SECRET), entero entre 1 y 99. Subirla las reescribe en Secrets Manager (rotación); ver el README."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.credentials_version >= 1 && var.credentials_version == floor(var.credentials_version) && var.credentials_version < 100
+    error_message = "credentials_version debe ser un entero entre 1 y 99."
+  }
+}

@@ -13,18 +13,7 @@ variable "cost_center" {
   type        = string
 }
 
-variable "state_bucket" {
-  description = "Bucket S3 del estado remoto (el que crea bootstrap/)."
+variable "brokers_parameter_name" {
+  description = "Nombre del parámetro de SSM con los brokers SASL/IAM: la salida bootstrap_brokers_parameter_name de envs/dev."
   type        = string
-}
-
-variable "state_region" {
-  description = "Región del bucket de estado."
-  type        = string
-}
-
-variable "platform_state_key" {
-  description = "Clave del estado de la plataforma (envs/dev) dentro del bucket."
-  type        = string
-  default     = "fleet-telemetry/dev/platform.tfstate"
 }

@@ -18,15 +18,11 @@ terraform {
   backend "s3" {}
 }
 
-# La región y los brokers salen del estado de la plataforma: sin valores duplicados entre raíces.
-data "terraform_remote_state" "platform" {
-  backend = "s3"
-
-  config = {
-    bucket = var.state_bucket
-    key    = var.platform_state_key
-    region = var.state_region
-  }
+# Los brokers los publica envs/dev en SSM Parameter Store (String, no es un secreto). Se leen con un data source y NO con
+# `terraform_remote_state`: este último daría a esta raíz (y a su runner, dentro de la VPC) lectura de TODO el estado de la plataforma.
+# El principal que aplica esta raíz solo necesita ssm:GetParameter sobre ese parámetro (política `topics_admin` de envs/dev).
+data "aws_ssm_parameter" "bootstrap_brokers" {
+  name = var.brokers_parameter_name
 }
 
 provider "aws" {
@@ -43,10 +39,10 @@ provider "aws" {
   }
 }
 
-# MSK Serverless solo acepta SASL/IAM sobre TLS. Las credenciales AWS salen del entorno (OIDC o SSO); el principal necesita
-# kafka-cluster:* sobre los tópicos que crea (rol de administración, distinto de los roles de los servicios).
+# MSK Serverless solo acepta SASL/IAM sobre TLS. Las credenciales AWS salen del entorno (OIDC o SSO); el principal necesita la política
+# `topics_admin` de envs/dev (rol de administración, distinto de los roles de los servicios) y el runner, su SG `topics_admin`.
 provider "kafka" {
-  bootstrap_servers = split(",", data.terraform_remote_state.platform.outputs.bootstrap_brokers_sasl_iam)
+  bootstrap_servers = split(",", data.aws_ssm_parameter.bootstrap_brokers.value)
   tls_enabled       = true
   sasl_mechanism    = "aws-iam"
   sasl_aws_region   = var.aws_region

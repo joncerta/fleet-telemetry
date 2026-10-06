@@ -3,17 +3,32 @@ locals {
   environment = "dev"
   name        = "${local.project}-${local.environment}"
 
-  gateway_port = 4001
-  # Mismo comando que el healthcheck de docker-compose.yml: la imagen no trae curl.
-  gateway_health_command = [
-    "CMD",
-    "node",
-    "-e",
-    "fetch('http://127.0.0.1:${local.gateway_port}/health',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
-  ]
+  # Servicios HTTP detrás del ALB y su puerto. Cada uno recibe su regla de SG, su target group y su healthcheck.
+  http_ports   = { ingest-gateway = 4001, fleet-api = 4002 }
+  gateway_port = local.http_ports["ingest-gateway"]
+  fleet_port   = local.http_ports["fleet-api"]
 
-  # Imágenes de los servicios que existen hoy. fleet-api, agent y web se agregan aquí y en `services` cuando existan.
-  repositories = ["ingest-gateway", "processor", "migrate"]
+  # LIVENESS, no readiness: `/health/live` no consulta la base ni Kafka. Con `/health` (readiness: 503 si falta la base), un corte breve de
+  # la base haría fallar el healthcheck del contenedor Y el del target group de TODAS las tareas a la vez: ECS las mataría y el ALB
+  # quedaría sin destinos, convirtiendo una degradación en una caída total. `/health` queda para compose y los e2e.
+  # Mismo comando que el healthcheck de docker-compose.yml (la imagen no trae curl), con otra ruta.
+  live_path = "/health/live"
+  live_command = {
+    for name, port in local.http_ports : name => [
+      "CMD",
+      "node",
+      "-e",
+      "fetch('http://127.0.0.1:${port}${local.live_path}',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+    ]
+  }
+
+  # SSE: el heartbeat de fleet-api debe ser <= este intervalo (requisito para el backend); el idle timeout del ALB se deriva de él.
+  # Restricción: 2 x heartbeat <= idle timeout < keep-alive de Fastify (72 s). Con 30 s: 60 <= 65 < 72.
+  sse_heartbeat_max_seconds = 30
+  alb_idle_timeout_seconds  = 65
+
+  # Imágenes de los servicios que existen hoy. agent y web se agregan aquí y en `services` cuando existan.
+  repositories = ["ingest-gateway", "processor", "fleet-api", "migrate"]
   images       = { for name in local.repositories : name => "${module.ecr.repository_urls[name]}:${var.image_tag}" }
 }
 
@@ -81,20 +96,24 @@ resource "aws_vpc_security_group_ingress_rule" "alb_https" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_tasks" {
+  for_each = local.http_ports
+
   security_group_id            = aws_security_group.alb.id
-  description                  = "Hacia las tareas del gateway"
+  description                  = "Hacia las tareas de ${each.key}"
   ip_protocol                  = "tcp"
-  from_port                    = local.gateway_port
-  to_port                      = local.gateway_port
+  from_port                    = each.value
+  to_port                      = each.value
   referenced_security_group_id = aws_security_group.tasks.id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "tasks_from_alb" {
+  for_each = local.http_ports
+
   security_group_id            = aws_security_group.tasks.id
-  description                  = "Trafico del ALB al gateway"
+  description                  = "Trafico del ALB a ${each.key}"
   ip_protocol                  = "tcp"
-  from_port                    = local.gateway_port
-  to_port                      = local.gateway_port
+  from_port                    = each.value
+  to_port                      = each.value
   referenced_security_group_id = aws_security_group.alb.id
 }
 
@@ -137,6 +156,43 @@ resource "aws_vpc_security_group_ingress_rule" "msk_from_tasks" {
   referenced_security_group_id = aws_security_group.tasks.id
 }
 
+# --- Administración de tópicos (envs/dev-topics) ----------------------------------------------------------------------------
+# El proveedor `kafka` debe llegar a los brokers desde DENTRO de la VPC. Este SG se adjunta al runner autoalojado (o a la instancia que
+# haga de túnel SSM) que aplica envs/dev-topics: es el único origen, además de las tareas, admitido por el SG de MSK.
+resource "aws_security_group" "topics_admin" {
+  name        = "${local.name}-topics-admin"
+  description = "Runner que aplica los topicos de Kafka: 9098 hacia MSK; salida 443 hacia las APIs de AWS"
+  vpc_id      = module.network.vpc_id
+}
+
+resource "aws_vpc_security_group_egress_rule" "topics_admin_to_msk" {
+  security_group_id            = aws_security_group.topics_admin.id
+  description                  = "Kafka (SASL/IAM sobre TLS)"
+  ip_protocol                  = "tcp"
+  from_port                    = 9098
+  to_port                      = 9098
+  referenced_security_group_id = aws_security_group.msk.id
+}
+
+#trivy:ignore:AWS-0104 Riesgo aceptado: salida solo 443 por NAT hacia las APIs de AWS (STS para firmar con IAM, SSM Parameter Store, estado en S3). Ver README, "Riesgos aceptados".
+resource "aws_vpc_security_group_egress_rule" "topics_admin_https_out" {
+  security_group_id = aws_security_group.topics_admin.id
+  description       = "APIs de AWS por NAT (STS, SSM, S3 del estado)"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "msk_from_topics_admin" {
+  security_group_id            = aws_security_group.msk.id
+  description                  = "Administracion de topicos (SASL/IAM) desde el runner de envs/dev-topics"
+  ip_protocol                  = "tcp"
+  from_port                    = 9098
+  to_port                      = 9098
+  referenced_security_group_id = aws_security_group.topics_admin.id
+}
+
 resource "aws_vpc_security_group_ingress_rule" "database_from_tasks" {
   security_group_id            = aws_security_group.database.id
   description                  = "PostgreSQL desde las tareas"
@@ -168,6 +224,8 @@ module "timescaledb" {
   kms_key_arn        = module.kms.key_arn
   instance_type      = var.database_instance_type
   log_retention_days = var.log_retention_days
+
+  credentials_version = var.credentials_version
 }
 
 module "msk" {
@@ -176,6 +234,16 @@ module "msk" {
   name               = local.name
   subnet_ids         = module.network.private_subnet_ids
   security_group_ids = [aws_security_group.msk.id]
+}
+
+# Los brokers se publican en SSM Parameter Store para que envs/dev-topics los lea con `data "aws_ssm_parameter"`, sin
+# `terraform_remote_state` (que daría a la raíz de tópicos acceso de lectura a TODO el estado de la plataforma). Los nombres de host no
+# son secretos: parámetro String estándar.
+resource "aws_ssm_parameter" "bootstrap_brokers" {
+  name        = "/${local.name}/msk/bootstrap-brokers-sasl-iam"
+  description = "Brokers SASL/IAM de MSK Serverless (host:9098, separados por coma). Los lee envs/dev-topics."
+  type        = "String"
+  value       = module.msk.bootstrap_brokers_sasl_iam
 }
 
 # --- Permisos de Kafka por servicio (mínimo privilegio, por tópico y por grupo) ---------------------------------------------
@@ -229,6 +297,88 @@ data "aws_iam_policy_document" "processor" {
   }
 }
 
+# Fleet-api solo LEE vehicle.state y fleet.alerts. Cada réplica que alimenta SSE usa su propio consumer group (no comparten, regla 6 de
+# CLAUDE.md): los grupos son `fleet-api-*`. PROPUESTA: el nombre real del grupo lo define el backend (todavía no consume Kafka en develop).
+data "aws_iam_policy_document" "fleet_api" {
+  statement {
+    sid       = "Connect"
+    effect    = "Allow"
+    actions   = ["kafka-cluster:Connect"]
+    resources = [module.msk.cluster_arn]
+  }
+
+  statement {
+    sid       = "ReadStateAndAlerts"
+    effect    = "Allow"
+    actions   = ["kafka-cluster:DescribeTopic", "kafka-cluster:ReadData"]
+    resources = [local.topic_arn["vehicle.state"], local.topic_arn["fleet.alerts"]]
+  }
+
+  statement {
+    sid       = "OwnConsumerGroups"
+    effect    = "Allow"
+    actions   = ["kafka-cluster:AlterGroup", "kafka-cluster:DescribeGroup"]
+    resources = ["${module.msk.group_arn_prefix}/fleet-api-*"]
+  }
+}
+
+# Política del principal que aplica envs/dev-topics (rol del runner): crea y describe SOLO los tópicos del catálogo. Se adjunta a ese
+# rol fuera de este código (el runner y su rol no se crean aquí).
+data "aws_iam_policy_document" "topics_admin" {
+  statement {
+    sid       = "Connect"
+    effect    = "Allow"
+    actions   = ["kafka-cluster:Connect", "kafka-cluster:DescribeCluster"]
+    resources = [module.msk.cluster_arn]
+  }
+
+  statement {
+    sid    = "ManageCatalogTopics"
+    effect = "Allow"
+    actions = [
+      "kafka-cluster:CreateTopic",
+      "kafka-cluster:DescribeTopic",
+      "kafka-cluster:AlterTopic",
+      "kafka-cluster:DescribeTopicDynamicConfiguration",
+      "kafka-cluster:AlterTopicDynamicConfiguration",
+    ]
+    resources = values(local.topic_arn)
+  }
+
+  statement {
+    sid       = "ReadBrokersParameter"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = [aws_ssm_parameter.bootstrap_brokers.arn]
+  }
+}
+
+resource "aws_iam_policy" "topics_admin" {
+  name        = "${local.name}-topics-admin"
+  description = "Crear y describir los topicos del catalogo y leer el parametro de brokers (runner de envs/dev-topics)."
+  policy      = data.aws_iam_policy_document.topics_admin.json
+}
+
+# SESSION_SECRET de fleet-api (HMAC de la cookie, >= 32 bytes): efímero y de solo escritura, como las contraseñas de la base. Rotarlo
+# (credentials_version) invalida las sesiones abiertas.
+ephemeral "random_password" "session" {
+  length  = 48
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "session" {
+  name                    = "${local.name}/app/session"
+  description             = "SESSION_SECRET de fleet-api (firma de la cookie de sesion)."
+  kms_key_id              = module.kms.key_arn
+  recovery_window_in_days = 7
+}
+
+resource "aws_secretsmanager_secret_version" "session" {
+  secret_id                = aws_secretsmanager_secret.session.id
+  secret_string_wo         = ephemeral.random_password.session.result
+  secret_string_wo_version = var.credentials_version
+}
+
 # --- Servicios en Fargate, detrás del ALB (solo 443) ----------------------------------------------------------------------
 locals {
   # Nombres propuestos para la autenticación de Kafka en AWS: el backend los define (ADR-004, "Pendiente": TLS y SASL/IAM de MSK).
@@ -255,13 +405,13 @@ module "services" {
   certificate_arn         = var.certificate_arn
   kms_key_arn             = module.kms.key_arn
   ecr_repository_arns     = values(module.ecr.repository_arns)
-  secret_arns             = [module.timescaledb.secret_arn]
   log_retention_days      = var.log_retention_days
 
-  # REQUISITO PARA EL BACKEND (fleet-api): el heartbeat del SSE debe enviarse cada <= 30 s. El idle timeout del ALB (120 s por
-  # defecto en este módulo, 60 s en AWS) es el mínimo seguro para ese intervalo; la precondición del módulo exige >= 2 latidos.
-  sse_heartbeat_interval_seconds = 30
-  alb_idle_timeout_seconds       = 120
+  # REQUISITO PARA EL BACKEND (fleet-api): el heartbeat del SSE debe enviarse cada <= 30 s. El idle timeout del ALB (65 s) cumple
+  # 2 x 30 <= 65 y queda por debajo del keep-alive de Fastify (72 s): dos precondiciones del módulo lo garantizan.
+  sse_heartbeat_interval_seconds     = local.sse_heartbeat_max_seconds
+  alb_idle_timeout_seconds           = local.alb_idle_timeout_seconds
+  backend_keep_alive_timeout_seconds = 72
 
   services = {
     ingest-gateway = {
@@ -276,13 +426,42 @@ module "services" {
         # Es seguro porque el SG de las tareas solo admite tráfico del ALB.
         INGEST_GATEWAY_TRUSTED_PROXY_HOPS = "1"
       })
-      secrets              = { DATABASE_URL = "${module.timescaledb.secret_arn}:app_url::" }
+      secrets              = { DATABASE_URL = "${module.timescaledb.secret_arns["app"]}:app_url::" }
       task_policy_json     = data.aws_iam_policy_document.gateway.json
       container_port       = local.gateway_port
-      health_check_path    = "/health"
-      health_check_command = local.gateway_health_command
+      health_check_path    = local.live_path
+      health_check_command = local.live_command["ingest-gateway"]
       listener_priority    = 100
       path_patterns        = ["/v1/telemetry/*"]
+    }
+
+    fleet-api = {
+      image         = local.images["fleet-api"]
+      cpu           = 256
+      memory        = 512
+      desired_count = var.fleet_api_desired_count
+      environment = merge(local.kafka_aws_environment, {
+        FLEET_API_HOST = "0.0.0.0"
+        FLEET_API_PORT = tostring(local.fleet_port)
+        # El ALB es el único proxy delante de fleet-api (el SG de las tareas solo admite tráfico del ALB).
+        FLEET_API_TRUSTED_PROXY_HOPS = "1"
+        # El ALB termina TLS: la cookie de sesión debe ser Secure.
+        FLEET_API_COOKIE_SECURE = "true"
+        FLEET_API_CORS_ORIGINS  = join(",", var.fleet_api_cors_origins)
+        # Latido a la mitad del máximo: con el idle timeout del ALB caben varios latidos perdidos.
+        SSE_HEARTBEAT_MS = tostring(local.sse_heartbeat_max_seconds * 1000 / 2)
+      })
+      secrets = {
+        DATABASE_URL   = "${module.timescaledb.secret_arns["app"]}:app_url::"
+        SESSION_SECRET = aws_secretsmanager_secret.session.arn
+      }
+      task_policy_json     = data.aws_iam_policy_document.fleet_api.json
+      container_port       = local.fleet_port
+      health_check_path    = local.live_path
+      health_check_command = local.live_command["fleet-api"]
+      # Después de la regla del gateway (100): el resto de /v1/* (auth, dispositivos, lecturas y stream SSE) es de fleet-api.
+      listener_priority = 200
+      path_patterns     = ["/v1/*"]
     }
 
     processor = {
@@ -293,7 +472,7 @@ module "services" {
       environment = merge(local.kafka_aws_environment, {
         PROCESSOR_CONSUMER_GROUP = var.processor_consumer_group
       })
-      secrets          = { DATABASE_URL = "${module.timescaledb.secret_arn}:app_url::" }
+      secrets          = { DATABASE_URL = "${module.timescaledb.secret_arns["app"]}:app_url::" }
       task_policy_json = data.aws_iam_policy_document.processor.json
     }
   }
@@ -308,9 +487,10 @@ module "services" {
         LOG_LEVEL = "info"
       }
       secrets = {
-        DATABASE_ADMIN_URL = "${module.timescaledb.secret_arn}:admin_url::"
-        FLEET_APP_PASSWORD = "${module.timescaledb.secret_arn}:fleet_app_password::"
-        FLEET_RO_PASSWORD  = "${module.timescaledb.secret_arn}:fleet_ro_password::"
+        # Único consumidor del secreto db/admin (el superusuario): ninguna otra tarea tiene permiso para leerlo.
+        DATABASE_ADMIN_URL = "${module.timescaledb.secret_arns["admin"]}:admin_url::"
+        FLEET_APP_PASSWORD = "${module.timescaledb.secret_arns["admin"]}:fleet_app_password::"
+        FLEET_RO_PASSWORD  = "${module.timescaledb.secret_arns["admin"]}:fleet_ro_password::"
       }
     }
   }
