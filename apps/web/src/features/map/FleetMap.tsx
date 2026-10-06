@@ -24,7 +24,9 @@ import {
 import { MapLegend } from "./MapLegend";
 import { createLoadWatchdog, createRenderScheduler } from "./render-scheduler";
 import { statusIcons } from "./status-icons";
+import { isDrawing } from "../zones/zone-drawing-store";
 import { toVehicleFeatures } from "./vehicle-features";
+import { attachZoneDrawing } from "./zone-drawing-layer";
 
 /**
  * Worker de MapLibre servido como archivo estático (lo copia `scripts/copy-maplibre-worker.mjs` desde la versión instalada): la URL por
@@ -59,7 +61,7 @@ const MAP_LOCALE: Record<string, string> = {
  * nunca un marker ni un componente por vehículo.
  */
 export default function FleetMap({ styleUrl }: { styleUrl: string }) {
-  const { fleetStore } = useServices();
+  const { fleetStore, zoneDrawingStore } = useServices();
   const containerRef = useRef<HTMLDivElement>(null);
   const [mapState, setMapState] = useState<MapState>("loading");
   /** La fuente de vehículos terminó de procesarse (lo hace el worker de MapLibre): solo entonces se ven en el mapa. */
@@ -97,6 +99,9 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
     let renderedZones: FleetStore["zones"]["data"] = null;
     let criticalZoneIds = criticalZoneIdsOf(null);
     let renderedSelection: string | null = null;
+    let detachZoneDrawing: (() => void) | null = null;
+    /** Dibujando una zona: los clics agregan vértices y no seleccionan vehículos ni acercan clústeres. */
+    const drawing = () => isDrawing(zoneDrawingStore.getState());
 
     const vehiclesSource$ = () => map.getSource<GeoJSONSource>(SOURCE_IDS.vehicles);
     const zonesSource$ = () => map.getSource<GeoJSONSource>(SOURCE_IDS.zones);
@@ -144,6 +149,7 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
       map.addSource(SOURCE_IDS.zones, zonesSource);
       map.addSource(SOURCE_IDS.vehicles, vehiclesSource);
       for (const layer of [zoneFillLayer, zoneLineLayer, clustersLayer, clusterCountLayer, selectedLayer, vehiclesLayer]) map.addLayer(layer);
+      detachZoneDrawing = attachZoneDrawing(map, zoneDrawingStore);
       loaded = true;
       setMapState("ready");
       scheduler.start();
@@ -159,11 +165,13 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
     });
 
     const onClick = map.on("click", LAYER_IDS.vehicles, (event) => {
+      if (drawing()) return;
       const vehicleId: unknown = event.features?.[0]?.properties.vehicleId;
       if (typeof vehicleId === "string") fleetStore.getState().selectVehicle(vehicleId);
     });
     // Un clic en un clúster acerca el mapa hasta que se separa.
     const onClusterClick = map.on("click", LAYER_IDS.clusters, (event) => {
+      if (drawing()) return;
       const clusterId: unknown = event.features?.[0]?.properties.cluster_id;
       if (typeof clusterId !== "number") return;
       const center = event.lngLat;
@@ -174,9 +182,11 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
     });
     const pointerOn = (layer: string) => [
       map.on("mouseenter", layer, () => {
+        if (drawing()) return;
         map.getCanvas().style.cursor = "pointer";
       }),
       map.on("mouseleave", layer, () => {
+        if (drawing()) return;
         map.getCanvas().style.cursor = "";
       }),
     ];
@@ -190,12 +200,13 @@ export default function FleetMap({ styleUrl }: { styleUrl: string }) {
 
     return () => {
       unsubscribeStore();
+      detachZoneDrawing?.();
       scheduler.dispose();
       vehiclesWatchdog.dispose();
       for (const subscription of [onClick, onClusterClick, onError, onSourceData, ...pointerSubscriptions]) subscription.unsubscribe();
       map.remove();
     };
-  }, [fleetStore, styleUrl]);
+  }, [fleetStore, zoneDrawingStore, styleUrl]);
 
   return (
     <div className="absolute inset-0">

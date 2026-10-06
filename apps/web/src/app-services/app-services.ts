@@ -3,6 +3,7 @@ import type { StoreApi } from "zustand/vanilla";
 import type { PublicEnv } from "../config/public-env";
 import { createSessionStore, type SessionStore } from "../features/auth/session-store";
 import { createFleetStore, type FleetStore } from "../features/fleet/fleet-store";
+import { createZoneDrawingStore, type ZoneDrawingStore } from "../features/zones/zone-drawing-store";
 import { createFleetSync } from "../features/fleet/fleet-sync";
 import { browserEventSource, createFleetStream, type SessionProbe } from "../features/stream/fleet-stream-client";
 import { createAgentApi, type AgentApi } from "../lib/api/agent-api";
@@ -54,6 +55,8 @@ export interface AppServices {
   agentApi: AgentApi;
   fleetStore: StoreApi<FleetStore>;
   sessionStore: StoreApi<SessionStore>;
+  /** Dibujo de una zona en curso: lo comparten el mapa (clics) y el panel "Zonas". */
+  zoneDrawingStore: StoreApi<ZoneDrawingStore>;
   /** La ÚNICA conexión SSE de la app (con conteo de referencias). */
   fleetSync: SharedResource;
   /** Registra el login exitoso (identidad en memoria) y avisa a las demás pestañas para que no sigan con la sesión anterior. */
@@ -66,12 +69,14 @@ export interface AppServices {
 export function createAppServices(env: PublicEnv, options: AppServicesOptions = {}): AppServices {
   const sessionStore = createSessionStore();
   const fleetStore = createFleetStore();
+  const zoneDrawingStore = createZoneDrawingStore();
   const http = createHttpClient({ baseUrl: env.fleetApiUrl, logError: logWarn });
 
   // Sin sesión (401 en una llamada o en el stream): se corta el stream y se borran los datos ANTES de ir al login.
   const endSession = () => {
     fleetSync.dispose();
     fleetStore.getState().reset();
+    zoneDrawingStore.getState().cancel();
     sessionStore.getState().signedOut();
   };
 
@@ -142,6 +147,7 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
     agentApi,
     fleetStore,
     sessionStore,
+    zoneDrawingStore,
     fleetSync,
     signIn(session) {
       sessionStore.getState().signedIn(session);
@@ -155,6 +161,7 @@ export function createAppServices(env: PublicEnv, options: AppServicesOptions = 
         logWarn("No se pudo cerrar la sesión en el servidor");
       }
       fleetStore.getState().reset();
+      zoneDrawingStore.getState().cancel();
       // Cierre explícito (puede ser un equipo compartido): no quedan preferencias de la interfaz del usuario.
       clearPanelPreferences(browserStorage());
       sessionStore.getState().signedOut();
