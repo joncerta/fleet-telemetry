@@ -1,0 +1,1 @@
+{"status":"ok","checks":{"fleetApi":"up","model":"up"},"dependencies":{"fleetApi":{"breaker":"closed"},"model":{"breaker":"halfOpen"}}}

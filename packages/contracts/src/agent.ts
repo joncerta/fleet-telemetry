@@ -62,6 +62,12 @@ function agentModel<B extends z.ZodType, S extends z.ZodType>(enums: { breakerSt
         fleetApi: z.object({
           breaker: enums.breakerState.describe("Estado del circuit breaker hacia fleet-api. Desde v1."),
         }),
+        model: z
+          .object({
+            breaker: enums.breakerState.describe("Estado del circuit breaker hacia el proveedor del modelo. Desde v2 (aditivo, opcional)."),
+          })
+          .optional()
+          .describe("Proveedor del modelo (Anthropic). Opcional: un agente anterior no lo envía. Desde v2 (aditivo, opcional)."),
       })
       .describe("Estado de las dependencias remotas (un breaker por dependencia). Desde v1."),
   });
