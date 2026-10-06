@@ -4,7 +4,8 @@ import { useCallback, useMemo } from "react";
 import type { FleetStore } from "../fleet/fleet-store";
 import { useFleet, useServerNow, useServices, useThrottledFleet } from "../../app-services/services-context";
 import { Panel, PanelNote } from "../../components/panel";
-import { formatDuration, formatTime } from "../../lib/format";
+import { panelError } from "../../components/panel-error";
+import { formatDuration } from "../../lib/format";
 import type { Loadable } from "../../lib/loadable";
 import { STOPPED_QUERY } from "../fleet/fleet-sync";
 import { stoppedRows, type StoppedRow } from "./stopped-view";
@@ -35,10 +36,7 @@ export function StoppedList({ rows, onSelect }: { rows: readonly StoppedRow[]; o
   );
 }
 
-/**
- * Cuerpo del panel (sin store). El aviso de error sale de `error` (que `loading()` conserva entre recargas) y no del estado: con la API
- * caída, cada recarga no desmonta y vuelve a montar el `role="alert"`, que el lector de pantalla anunciaría de nuevo.
- */
+/** Cuerpo del panel (sin store). El aviso de error vive en el encabezado del panel (`panelError`), visible también con el panel cerrado. */
 export function StoppedBody({
   stopped,
   rows,
@@ -52,14 +50,6 @@ export function StoppedBody({
     <>
       {stopped.data === null && stopped.error === null && <PanelNote>Cargando…</PanelNote>}
       {stopped.data !== null && <StoppedList rows={rows} onSelect={onSelect} />}
-      {stopped.error !== null && (
-        <div className="mt-2">
-          <PanelNote tone="error">
-            {stopped.error}
-            {stopped.updatedAt !== null && ` Lista de las ${formatTime(stopped.updatedAt)}.`}
-          </PanelNote>
-        </div>
-      )}
     </>
   );
 }
@@ -80,6 +70,7 @@ export function StoppedPanel() {
       id="stopped"
       title={`Detenidos +${STOPPED_QUERY.minMinutes} min en zonas críticas`}
       defaultOpen={false}
+      error={panelError(stopped, "Lista")}
       count={stopped.data === null ? undefined : rows.length}
     >
       <StoppedBody stopped={stopped} rows={rows} onSelect={select} />

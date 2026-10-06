@@ -2,14 +2,17 @@
 
 import { useCallback, useId, useState, type ReactNode } from "react";
 import { useSession } from "../app-services/services-context";
+import type { PanelError } from "./panel-error";
 import { browserStorage, panelStorageKey, readPanelPreferences, resolveOpen, writePanelPreference } from "./panel-state";
 
 interface PanelViewProps {
   /** Id estable del panel (clave de la preferencia guardada y base de los ids del DOM). */
   id: string;
   title: string;
-  /** Resumen que se ve aun con el panel cerrado ("6 activas", "15"). */
+  /** Resumen que se ve aun con el panel cerrado ("6 activas", "15 con datos"). */
   count?: ReactNode;
+  /** Fallo al cargar los datos del panel: se ve en el encabezado y se anuncia (un solo `role="alert"`) aun con el panel cerrado. */
+  error?: PanelError | null;
   open: boolean;
   onToggle: () => void;
   /** Se muestra siempre, aun cerrado (p. ej. las regiones `aria-live`, que ocultas no anunciarían nada). */
@@ -24,7 +27,7 @@ interface PanelViewProps {
 const hasContent = (node: ReactNode): boolean => node !== undefined && node !== null && node !== false && node !== "";
 
 /** Presentación de un panel desplegable (sin store): encabezado clicable con `aria-expanded`/`aria-controls` y contador visible cerrado. */
-export function CollapsiblePanelView({ id, title, count, open, onToggle, persistent, keepMounted = false, aside, children }: PanelViewProps) {
+export function CollapsiblePanelView({ id, title, count, error = null, open, onToggle, persistent, keepMounted = false, aside, children }: PanelViewProps) {
   const titleId = `${id}-title`;
   const bodyId = `${id}-body`;
   return (
@@ -32,6 +35,7 @@ export function CollapsiblePanelView({ id, title, count, open, onToggle, persist
       <h2>
         <button
           type="button"
+          id={`${id}-toggle`}
           aria-expanded={open}
           aria-controls={bodyId}
           onClick={onToggle}
@@ -41,13 +45,23 @@ export function CollapsiblePanelView({ id, title, count, open, onToggle, persist
             <span id={titleId} className="text-xs font-semibold uppercase tracking-wide text-ink-muted">
               {title}
             </span>
-            {hasContent(count) && <span className="text-xs font-medium text-ink tabular-nums">· {count}</span>}
+            {error !== null ? (
+              <span className="text-xs font-medium text-danger">· {error.summary}</span>
+            ) : (
+              hasContent(count) && <span className="text-xs font-medium text-ink tabular-nums">· {count}</span>
+            )}
           </span>
           <span aria-hidden="true" className="shrink-0 text-ink-muted">
             {open ? "▾" : "▸"}
           </span>
         </button>
       </h2>
+      {/* Fuera del cuerpo: cerrado también se ve y se anuncia, y se monta una sola vez mientras dure el fallo. */}
+      {error !== null && (
+        <div className="px-4 pb-3">
+          <PanelNote tone="error">{error.message}</PanelNote>
+        </div>
+      )}
       {persistent}
       <div id={bodyId} hidden={!open} className="px-4 pb-4">
         {(open || keepMounted) && (
@@ -61,23 +75,36 @@ export function CollapsiblePanelView({ id, title, count, open, onToggle, persist
   );
 }
 
-type PanelProps = Omit<PanelViewProps, "open" | "onToggle"> & { defaultOpen: boolean };
-
 /**
- * Panel desplegable de la columna lateral. El estado se recuerda por usuario en `localStorage`; si no se puede leer o escribir, vale el
- * valor por defecto y el cambio dura lo que la pestaña. Solo se monta con sesión (el dashboard no se renderiza en el servidor).
+ * Estado abierto/cerrado de un panel, recordado por usuario en `localStorage`; si no se puede leer o escribir, vale el valor por defecto
+ * y el cambio dura lo que la pestaña. `setOpen(open, false)` abre sin guardar (aperturas automáticas, que no son una decisión del usuario).
+ * Solo se usa con sesión (el dashboard no se renderiza en el servidor).
  */
-export function Panel({ defaultOpen, ...view }: PanelProps) {
+export function usePanelOpen(id: string, defaultOpen: boolean): readonly [boolean, (open: boolean, persist?: boolean) => void] {
   const userId = useSession((state) => state.session?.user.userId ?? "anonymous");
   const key = panelStorageKey(userId);
-  const { id } = view;
-  const [open, setOpen] = useState(() => resolveOpen(readPanelPreferences(browserStorage(), key), id, defaultOpen));
-  const onToggle = useCallback(() => {
-    const next = !open;
-    setOpen(next);
-    writePanelPreference(browserStorage(), key, id, next);
-  }, [open, key, id]);
-  return <CollapsiblePanelView {...view} open={open} onToggle={onToggle} />;
+  const [open, setOpenState] = useState(() => resolveOpen(readPanelPreferences(browserStorage(), key), id, defaultOpen));
+  const setOpen = useCallback(
+    (next: boolean, persist = true) => {
+      setOpenState(next);
+      if (persist) writePanelPreference(browserStorage(), key, id, next);
+    },
+    [key, id],
+  );
+  return [open, setOpen];
+}
+
+type PanelProps = Omit<PanelViewProps, "open" | "onToggle"> & { defaultOpen: boolean };
+
+/** Panel desplegable que gestiona su propio estado (con `usePanelOpen`). Si el padre necesita abrirlo, usa el hook y `CollapsiblePanelView`. */
+export function Panel({ defaultOpen, ...view }: PanelProps) {
+  const [open, setOpen] = usePanelOpen(view.id, defaultOpen);
+  return <CollapsiblePanelView {...view} open={open} onToggle={() => setOpen(!open)} />;
+}
+
+/** Devuelve el foco al encabezado de un panel (p. ej. cuando el elemento enfocado dentro de él desaparece). */
+export function focusPanelToggle(id: string): void {
+  document.getElementById(`${id}-toggle`)?.focus();
 }
 
 /** Sub-desplegable dentro de un panel (p. ej. el historial de alertas), cerrado por defecto y sin persistencia. */

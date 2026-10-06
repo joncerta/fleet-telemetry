@@ -108,6 +108,39 @@ describe("fleet-api", () => {
     expect(bodyOf(calls[0]?.init)).toEqual({ vehicleId: VEHICLE_A });
   });
 
+  it("el catálogo pide el límite, valida la respuesta y un 401 lleva al login", async () => {
+    const item = { vehicleId: VEHICLE_A, plate: "NRT101", label: null, hasActiveDevice: false, createdAt: NOW_ISO };
+    const ok = setup(() => json(200, { items: [item], limit: 500 }));
+    await expect(ok.api.listVehicles(500)).resolves.toEqual({ items: [item], limit: 500 });
+    expect(ok.calls[0]?.url).toBe(`${BASE}/v1/vehicles?limit=500`);
+
+    const invalid = setup(() => json(200, { items: [{ ...item, vehicleId: "no-es-uuid" }], limit: 500 }));
+    await expect(invalid.api.listVehicles(500)).rejects.toBeInstanceOf(InvalidResponseError);
+
+    const unauthorized = setup(() => json(401, { error: { code: "unauthorized", message: "x" } }));
+    await expect(unauthorized.api.listVehicles(500)).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(unauthorized.onUnauthorized).toHaveBeenCalledOnce();
+  });
+
+  it("el alta envía solo placa y nombre (nunca tenantId), acepta el 201 y propaga el 409", async () => {
+    const created = { vehicleId: VEHICLE_A, plate: "ABC123", label: "Camión", hasActiveDevice: false, createdAt: NOW_ISO };
+    const ok = setup(() => json(201, created));
+    await expect(ok.api.createVehicle({ plate: "ABC123", label: "Camión" })).resolves.toEqual(created);
+    expect(ok.calls[0]?.url).toBe(`${BASE}/v1/vehicles`);
+    expect(ok.calls[0]?.init.method).toBe("POST");
+    expect(bodyOf(ok.calls[0]?.init)).toEqual({ plate: "ABC123", label: "Camión" });
+
+    const taken = setup(() => json(409, { error: { code: "plate_taken", message: "x" } }));
+    await expect(taken.api.createVehicle({ plate: "ABC123", label: null })).rejects.toMatchObject({ status: 409, code: "plate_taken" });
+  });
+
+  it("los usuarios se piden con límite y se validan", async () => {
+    const user = { userId: VEHICLE_A, name: "Operador Norte", email: "operador@norte.test", createdAt: NOW_ISO };
+    const { api, calls } = setup(() => json(200, { items: [user] }));
+    await expect(api.listUsers(100)).resolves.toEqual({ items: [user] });
+    expect(calls[0]?.url).toBe(`${BASE}/v1/users?limit=100`);
+  });
+
   it("el logout acepta el 204 sin cuerpo", async () => {
     const { api } = setup(() => new Response(null, { status: 204 }));
     await expect(api.logout()).resolves.toBeUndefined();

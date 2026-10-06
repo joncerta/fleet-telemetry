@@ -1,12 +1,62 @@
-import { ApiRequestError, NetworkError } from "../../lib/api/http-client";
+import { PLATE_TAKEN_ERROR_CODE, VEHICLE_LABEL_MAX_LENGTH, vehicleCreateRequestSchema, type VehicleCreateRequest } from "@fleet/contracts";
+import { ApiRequestError, InvalidResponseError, NetworkError, UnauthorizedError } from "../../lib/api/http-client";
+
+const RATE_LIMITED = "Demasiadas solicitudes. Espera un momento e inténtalo de nuevo.";
+const NO_CONNECTION = "No se pudo conectar con el servidor. Inténtalo de nuevo.";
+const SESSION_ENDED = "Tu sesión terminó. Vuelve a ingresar.";
 
 /** Mensaje para el usuario cuando no se pudo crear el código de vinculación. */
 export function pairingErrorMessage(error: unknown): string {
-  if (error instanceof NetworkError) return "No se pudo conectar con el servidor. Inténtalo de nuevo.";
+  if (error instanceof NetworkError) return NO_CONNECTION;
+  if (error instanceof UnauthorizedError) return SESSION_ENDED;
   if (error instanceof ApiRequestError) {
     if (error.status === 404) return "Ese vehículo no existe o no pertenece a tu flota.";
-    if (error.status === 429) return "Demasiadas solicitudes. Espera un momento e inténtalo de nuevo.";
+    if (error.status === 429) return RATE_LIMITED;
     if (error.status === 400) return "Elige un vehículo válido.";
   }
   return "No se pudo generar el código. Inténtalo de nuevo.";
+}
+
+/** Mensaje para el usuario cuando no se pudo dar de alta el vehículo (`POST /v1/vehicles`). */
+export function vehicleCreateErrorMessage(error: unknown): string {
+  if (error instanceof NetworkError) return NO_CONNECTION;
+  if (error instanceof UnauthorizedError) return SESSION_ENDED;
+  if (error instanceof ApiRequestError) {
+    if (error.status === 409 && error.code === PLATE_TAKEN_ERROR_CODE) return "Ya existe un vehículo con esa placa.";
+    if (error.status === 429) return RATE_LIMITED;
+    if (error.status === 400) return "Revisa la placa y el nombre: el servidor no los aceptó.";
+  }
+  return "No se pudo crear el vehículo. Inténtalo de nuevo.";
+}
+
+/** Mensaje cuando el vehículo SÍ se creó pero no se pudo generar su código (se puede reintentar eligiéndolo en la lista). */
+export function createdButNotPairedMessage(error: unknown): string {
+  return `El vehículo se creó, pero no se pudo generar el código. ${pairingErrorMessage(error)} Elígelo en la lista para reintentar.`;
+}
+
+/** Mensaje cuando no se pudo leer una lista (catálogo, usuarios). */
+export function listErrorMessage(what: "vehículos" | "usuarios", error: unknown): string {
+  if (error instanceof UnauthorizedError) return SESSION_ENDED;
+  if (error instanceof NetworkError) return `No se pudo conectar para cargar los ${what}.`;
+  if (error instanceof ApiRequestError && error.status === 429) return RATE_LIMITED;
+  if (error instanceof InvalidResponseError) return `La lista de ${what} llegó con un formato inesperado.`;
+  return `No se pudieron cargar los ${what}.`;
+}
+
+export type VehicleFormResult = { ok: true; request: VehicleCreateRequest } | { ok: false; plateError: string | null; labelError: string | null };
+
+/** Valida el formulario con el esquema del contrato ANTES de enviar (normaliza la placa: trim y mayúsculas; un nombre vacío es null). */
+export function validateVehicleForm(plate: string, label: string): VehicleFormResult {
+  const parsed = vehicleCreateRequestSchema.safeParse({ plate, label });
+  if (parsed.success) return { ok: true, request: parsed.data };
+  let plateError: string | null = null;
+  let labelError: string | null = null;
+  for (const issue of parsed.error.issues) {
+    if (issue.path[0] === "label") {
+      labelError ??= `El nombre admite hasta ${String(VEHICLE_LABEL_MAX_LENGTH)} caracteres, sin caracteres de control.`;
+    } else {
+      plateError ??= plate.trim() === "" ? "Escribe la placa." : "La placa solo lleva letras y dígitos (por ejemplo ABC123).";
+    }
+  }
+  return { ok: false, plateError, labelError };
 }
