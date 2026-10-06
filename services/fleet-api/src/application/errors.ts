@@ -24,6 +24,14 @@ export class VehicleNotFoundError extends Error {
   }
 }
 
+/** La placa ya existe en el tenant de la sesión. El mensaje no lleva la placa: es un dato personal. */
+export class PlateTakenError extends Error {
+  constructor() {
+    super("La placa ya existe en el tenant.");
+    this.name = "PlateTakenError";
+  }
+}
+
 /** El código de vinculación no existe, ya se usó o venció. No se distingue ningún caso: no ayuda a quien adivina códigos. */
 export class InvalidPairingCodeError extends Error {
   constructor() {

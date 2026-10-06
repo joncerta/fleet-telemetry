@@ -72,6 +72,9 @@ const fleetApiConfig = z.object({
   // Canje de código de vinculación (sin sesión): fallos permitidos por IP y ventana. El código son 40 bits: el límite es estricto.
   FLEET_API_PAIR_FAILURE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000_000).default(10),
   FLEET_API_PAIR_FAILURE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(86_400_000).default(900_000),
+  // Alta de vehículos (POST /v1/vehicles): altas permitidas por usuario y ventana. Superado: 429 con Retry-After.
+  FLEET_API_VEHICLE_CREATE_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000_000).default(30),
+  FLEET_API_VEHICLE_CREATE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
   // Vida de un código de vinculación, en minutos.
   FLEET_API_PAIRING_CODE_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
 });

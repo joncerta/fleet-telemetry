@@ -1,14 +1,29 @@
 import { randomUUID } from "node:crypto";
-import type { Alert, DevicePairResponse, FleetSummary, PairingCode, Session, StoppedVehiclesResponse, VehicleState, ZoneFeatureCollection } from "@fleet/contracts";
+import type {
+  Alert,
+  DevicePairResponse,
+  FleetSummary,
+  PairingCode,
+  Session,
+  StoppedVehiclesResponse,
+  UserListResponse,
+  VehicleCatalogItem,
+  VehicleListResponse,
+  VehicleState,
+  ZoneFeatureCollection,
+} from "@fleet/contracts";
 import { createLogger, createSessionCodec } from "@fleet/platform";
 import { vi } from "vitest";
 import type { CreatePairingCode } from "../application/create-pairing-code.js";
+import type { CreateVehicle } from "../application/create-vehicle.js";
 import { createFleetEventHub } from "../application/fleet-event-hub.js";
 import type { GetFleetSummary } from "../application/get-fleet-summary.js";
 import type { GetSession } from "../application/get-session.js";
 import type { GetZonesGeoJson } from "../application/get-zones-geojson.js";
 import type { ListAlerts } from "../application/list-alerts.js";
 import type { ListStoppedVehicles } from "../application/list-stopped-vehicles.js";
+import type { ListUsers } from "../application/list-users.js";
+import type { ListVehicles } from "../application/list-vehicles.js";
 import type { Login } from "../application/login.js";
 import { createOpenFleetStream, type OpenFleetStream } from "../application/open-fleet-stream.js";
 import type { PairDevice } from "../application/pair-device.js";
@@ -17,6 +32,7 @@ import type { AuthIdentity } from "../domain/identity.js";
 import { createFixedWindowFailureCounter } from "../infrastructure/fixed-window-failure-counter.js";
 import { registerAuthRoutes } from "../interfaces/http/auth-routes.js";
 import { buildApp, type AppDependencies, type FleetApiApp } from "../interfaces/http/build-app.js";
+import { registerCatalogRoutes } from "../interfaces/http/catalog-routes.js";
 import { registerDeviceRoutes } from "../interfaces/http/device-routes.js";
 import { registerFleetRoutes } from "../interfaces/http/fleet-routes.js";
 import { registerStreamRoute } from "../interfaces/http/stream-route.js";
@@ -62,7 +78,18 @@ export const PAIRED = (vehicleId: string): DevicePairResponse => ({
   pairedAt: "2026-10-06T12:00:00.000Z",
 });
 
+export const CATALOG_VEHICLE: VehicleCatalogItem = {
+  vehicleId: randomUUID(),
+  plate: "ABC123",
+  label: "Camión 7",
+  hasActiveDevice: false,
+  createdAt: "2026-10-06T12:00:00.000Z",
+};
+
 export interface TestUseCases {
+  listVehicles: ListVehicles;
+  createVehicle: CreateVehicle;
+  listUsers: ListUsers;
   login: Login;
   getSession: GetSession;
   getSummary: GetFleetSummary;
@@ -79,6 +106,7 @@ export interface TestAppOptions {
   app?: Partial<AppDependencies>;
   loginLimit?: { max: number; timeWindowMs: number };
   pairLimit?: { max: number; timeWindowMs: number };
+  createVehicleLimit?: { max: number; timeWindowMs: number };
   secureCookie?: boolean;
   /** Cada cuántos ms late el stream SSE (por defecto 15 s). */
   heartbeatMs?: number;
@@ -124,6 +152,9 @@ export async function makeTestApp(options: TestAppOptions = {}) {
     listStoppedVehicles: vi.fn<ListStoppedVehicles>(() => Promise.resolve(STOPPED)),
     listAlerts: vi.fn<ListAlerts>(() => Promise.resolve({ items: noAlerts, next: null })),
     getZonesGeoJson: vi.fn<GetZonesGeoJson>(() => Promise.resolve(ZONES)),
+    listVehicles: vi.fn<ListVehicles>(({ limit }): Promise<VehicleListResponse> => Promise.resolve({ items: [CATALOG_VEHICLE], limit })),
+    createVehicle: vi.fn<CreateVehicle>(() => Promise.resolve(CATALOG_VEHICLE)),
+    listUsers: vi.fn<ListUsers>((): Promise<UserListResponse> => Promise.resolve({ items: [] })),
     createPairingCode: vi.fn<CreatePairingCode>(({ vehicleId }) => Promise.resolve(PAIRING_CODE(vehicleId))),
     pairDevice: vi.fn<PairDevice>(() => Promise.resolve({ response: PAIRED(randomUUID()), tenantId: NORTE.tenantId, deviceId: randomUUID() })),
     openFleetStream: fleetStream.open,
@@ -153,6 +184,13 @@ export async function makeTestApp(options: TestAppOptions = {}) {
         listStoppedVehicles: useCases.listStoppedVehicles,
         listAlerts: useCases.listAlerts,
         getZonesGeoJson: useCases.getZonesGeoJson,
+      });
+      registerCatalogRoutes(instance, {
+        cookies,
+        listVehicles: useCases.listVehicles,
+        createVehicle: useCases.createVehicle,
+        listUsers: useCases.listUsers,
+        createRateLimit: options.createVehicleLimit ?? { max: 1_000, timeWindowMs: 60_000 },
       });
       registerStreamRoute(instance, {
         cookies,
