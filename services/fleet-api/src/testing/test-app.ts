@@ -10,12 +10,14 @@ import type {
   VehicleCatalogItem,
   VehicleListResponse,
   VehicleState,
+  ZoneFeature,
   ZoneFeatureCollection,
 } from "@fleet/contracts";
 import { createLogger, createSessionCodec } from "@fleet/platform";
 import { vi } from "vitest";
 import type { CreatePairingCode } from "../application/create-pairing-code.js";
 import type { CreateVehicle } from "../application/create-vehicle.js";
+import type { CreateZone } from "../application/create-zone.js";
 import { createFleetEventHub } from "../application/fleet-event-hub.js";
 import type { GetFleetSummary } from "../application/get-fleet-summary.js";
 import type { GetSession } from "../application/get-session.js";
@@ -37,6 +39,7 @@ import { registerDeviceRoutes } from "../interfaces/http/device-routes.js";
 import { registerFleetRoutes } from "../interfaces/http/fleet-routes.js";
 import { registerStreamRoute } from "../interfaces/http/stream-route.js";
 import { createSessionCookies, SESSION_COOKIE_NAME } from "../interfaces/http/session-auth.js";
+import { registerZoneRoutes } from "../interfaces/http/zone-routes.js";
 
 /** Soporte de los tests de la capa HTTP: la app real de `buildApp` con las rutas reales y casos de uso falsos. No forma parte del build. */
 
@@ -86,7 +89,25 @@ export const CATALOG_VEHICLE: VehicleCatalogItem = {
   createdAt: "2026-10-06T12:00:00.000Z",
 };
 
+export const CREATED_ZONE: ZoneFeature = {
+  type: "Feature",
+  geometry: {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-74.075, 4.708],
+        [-74.069, 4.708],
+        [-74.069, 4.714],
+        [-74.075, 4.714],
+        [-74.075, 4.708],
+      ],
+    ],
+  },
+  properties: { zoneId: randomUUID(), name: "Zona crítica Norte", kind: "critical" },
+};
+
 export interface TestUseCases {
+  createZone: CreateZone;
   listVehicles: ListVehicles;
   createVehicle: CreateVehicle;
   listUsers: ListUsers;
@@ -107,6 +128,7 @@ export interface TestAppOptions {
   loginLimit?: { max: number; timeWindowMs: number };
   pairLimit?: { max: number; timeWindowMs: number };
   createVehicleLimit?: { max: number; timeWindowMs: number };
+  createZoneLimit?: { max: number; timeWindowMs: number };
   secureCookie?: boolean;
   /** Cada cuántos ms late el stream SSE (por defecto 15 s). */
   heartbeatMs?: number;
@@ -154,6 +176,7 @@ export async function makeTestApp(options: TestAppOptions = {}) {
     getZonesGeoJson: vi.fn<GetZonesGeoJson>(() => Promise.resolve(ZONES)),
     listVehicles: vi.fn<ListVehicles>(({ limit }): Promise<VehicleListResponse> => Promise.resolve({ items: [CATALOG_VEHICLE], limit })),
     createVehicle: vi.fn<CreateVehicle>(() => Promise.resolve(CATALOG_VEHICLE)),
+    createZone: vi.fn<CreateZone>(() => Promise.resolve(CREATED_ZONE)),
     listUsers: vi.fn<ListUsers>((): Promise<UserListResponse> => Promise.resolve({ items: [] })),
     createPairingCode: vi.fn<CreatePairingCode>(({ vehicleId }) => Promise.resolve(PAIRING_CODE(vehicleId))),
     pairDevice: vi.fn<PairDevice>(() => Promise.resolve({ response: PAIRED(randomUUID()), tenantId: NORTE.tenantId, deviceId: randomUUID() })),
@@ -191,6 +214,11 @@ export async function makeTestApp(options: TestAppOptions = {}) {
         createVehicle: useCases.createVehicle,
         listUsers: useCases.listUsers,
         createRateLimit: options.createVehicleLimit ?? { max: 1_000, timeWindowMs: 60_000 },
+      });
+      registerZoneRoutes(instance, {
+        cookies,
+        createZone: useCases.createZone,
+        createRateLimit: options.createZoneLimit ?? { max: 1_000, timeWindowMs: 60_000 },
       });
       registerStreamRoute(instance, {
         cookies,

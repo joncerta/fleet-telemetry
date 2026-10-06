@@ -7,6 +7,8 @@ import type {
   UserListItem,
   VehicleCatalogItem,
   VehicleState,
+  ZoneCreateRequest,
+  ZoneFeature,
   ZoneFeatureCollection,
   ZoneKind,
 } from "@fleet/contracts";
@@ -125,6 +127,19 @@ export interface AlertReader {
 export interface ZoneReader {
   /** Zonas del tenant como `FeatureCollection` de GeoJSON, coordenadas `[lng, lat]`. Acotado por un tope. */
   findZones(tenantId: string): Promise<ZoneFeatureCollection>;
+}
+
+export type CreateZoneResult =
+  | { readonly status: "created"; readonly zone: ZoneFeature }
+  | { readonly status: "name_taken" }
+  | { readonly status: "invalid_geometry" };
+
+export interface ZoneRepository {
+  /**
+   * Inserta la zona en el tenant. `name_taken` si el nombre ya existe en ESE tenant; `invalid_geometry` si PostGIS considera inválido el
+   * polígono (auto-intersección). Cualquier otro fallo de la base se propaga. Devuelve el Feature con el mismo formato que `findZones`.
+   */
+  create(input: { tenantId: string; zoneId: string; name: string; kind: ZoneCreateRequest["kind"]; geometry: ZoneCreateRequest["geometry"] }): Promise<CreateZoneResult>;
 }
 
 // --- Catálogo de vehículos y usuarios del tenant (todo filtra por `tenantId`) ---

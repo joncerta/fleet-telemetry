@@ -32,6 +32,22 @@ export class PlateTakenError extends Error {
   }
 }
 
+/** El nombre de la zona ya existe en el tenant de la sesión. El mensaje no lleva el nombre. */
+export class ZoneNameTakenError extends Error {
+  constructor() {
+    super("El nombre de la zona ya existe en el tenant.");
+    this.name = "ZoneNameTakenError";
+  }
+}
+
+/** PostGIS considera inválido el polígono (por ejemplo, con auto-intersección). */
+export class InvalidZoneGeometryError extends Error {
+  constructor() {
+    super("La geometría de la zona no es válida.");
+    this.name = "InvalidZoneGeometryError";
+  }
+}
+
 /** El código de vinculación no existe, ya se usó o venció. No se distingue ningún caso: no ayuda a quien adivina códigos. */
 export class InvalidPairingCodeError extends Error {
   constructor() {

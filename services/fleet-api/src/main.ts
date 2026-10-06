@@ -5,6 +5,7 @@ import { createCheckHealth } from "./application/check-health.js";
 import { createFleetEventHub } from "./application/fleet-event-hub.js";
 import { createCreatePairingCode } from "./application/create-pairing-code.js";
 import { createCreateVehicle } from "./application/create-vehicle.js";
+import { createCreateZone } from "./application/create-zone.js";
 import { createGetFleetSummary } from "./application/get-fleet-summary.js";
 import { createGetSession } from "./application/get-session.js";
 import { createGetZonesGeoJson } from "./application/get-zones-geojson.js";
@@ -24,6 +25,7 @@ import { createPgPairingCodeRepository, createPgPairingUnitOfWork } from "./infr
 import { createPgTenantUserReader } from "./infrastructure/pg-tenant-users.js";
 import { createPgUserRepository } from "./infrastructure/pg-user-repository.js";
 import { createPgVehicleCatalogRepository } from "./infrastructure/pg-vehicle-catalog.js";
+import { createPgZoneRepository } from "./infrastructure/pg-zone-repository.js";
 import { createDatabaseCheck, createFeedCheck } from "./infrastructure/readiness.js";
 import { registerAuthRoutes } from "./interfaces/http/auth-routes.js";
 import { buildApp } from "./interfaces/http/build-app.js";
@@ -32,6 +34,7 @@ import { registerDeviceRoutes } from "./interfaces/http/device-routes.js";
 import { registerFleetRoutes } from "./interfaces/http/fleet-routes.js";
 import { registerStreamRoute } from "./interfaces/http/stream-route.js";
 import { createSessionCookies } from "./interfaces/http/session-auth.js";
+import { registerZoneRoutes } from "./interfaces/http/zone-routes.js";
 import { createFleetEventFeed } from "./interfaces/kafka/fleet-event-feed.js";
 
 // Único composition root de fleet-api: aquí se crean y se conectan los adaptadores. Nada más del servicio construye infraestructura.
@@ -124,6 +127,11 @@ const app = await buildApp({
       createVehicle: createCreateVehicle({ catalog: vehicleCatalog, newVehicleId: randomUUID }),
       listUsers: createListUsers({ users: createPgTenantUserReader(pool) }),
       createRateLimit: { max: config.FLEET_API_VEHICLE_CREATE_RATE_LIMIT_MAX, timeWindowMs: config.FLEET_API_VEHICLE_CREATE_RATE_LIMIT_WINDOW_MS },
+    });
+    registerZoneRoutes(instance, {
+      cookies: sessionCookies,
+      createZone: createCreateZone({ zones: createPgZoneRepository(pool), newZoneId: randomUUID }),
+      createRateLimit: { max: config.FLEET_API_ZONE_CREATE_RATE_LIMIT_MAX, timeWindowMs: config.FLEET_API_ZONE_CREATE_RATE_LIMIT_WINDOW_MS },
     });
     registerStreamRoute(instance, {
       cookies: sessionCookies,
