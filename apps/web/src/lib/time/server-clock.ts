@@ -14,6 +14,12 @@ export function serverNowMs(offsetMs: number, clientNowMs: number): number {
   return clientNowMs + offsetMs;
 }
 
+/** Milisegundos que faltan, según la hora del SERVIDOR (`serverNowMs`), para `targetIso`. Nunca negativo; una fecha inválida cuenta como ya vencida. */
+export function msUntil(targetIso: string, serverNow: number): number {
+  const target = Date.parse(targetIso);
+  return Number.isNaN(target) ? 0 : Math.max(0, target - serverNow);
+}
+
 /** Minutos enteros transcurridos desde `sinceIso` hasta `nowMs` (nunca negativos: un reloj adelantado no da "-1 min"). */
 export function minutesSince(sinceIso: string, nowMs: number): number {
   const since = Date.parse(sinceIso);

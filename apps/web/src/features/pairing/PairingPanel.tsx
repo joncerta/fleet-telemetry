@@ -2,20 +2,44 @@
 
 import type { PairingCode } from "@fleet/contracts";
 import { useEffect, useId, useMemo, useState, type FormEvent } from "react";
-import { useFleet, useServices } from "../../app-services/services-context";
+import { shallow } from "zustand/shallow";
+import { PANEL_THROTTLE_MS, useFleet, useServices, useThrottledFleet } from "../../app-services/services-context";
 import { Panel, PanelNote } from "../../components/panel";
 import { formatTime } from "../../lib/format";
+import { msUntil, serverNowMs } from "../../lib/time/server-clock";
+import type { FleetStore } from "../fleet/fleet-store";
 import { pairingErrorMessage } from "./pairing-errors";
 
 const byPlate = new Intl.Collator("es-CO", { numeric: true, sensitivity: "base" });
 
+/** Solo id y placa de cada vehículo, como "id|placa": el selector devuelve strings para que la igualdad superficial baste. */
+const selectVehicleKeys = (state: FleetStore): string[] => Object.values(state.vehicles).map((vehicle) => `${vehicle.vehicleId}|${vehicle.plate}`);
+
+export interface PairingOption {
+  vehicleId: string;
+  plate: string;
+}
+
+/** Opciones del selector, ordenadas por placa, a partir de los pares "id|placa". */
+export function pairingOptions(keys: readonly string[]): PairingOption[] {
+  return keys
+    .map((key) => {
+      const separator = key.indexOf("|");
+      return { vehicleId: key.slice(0, separator), plate: key.slice(separator + 1) };
+    })
+    .sort((a, b) => byPlate.compare(a.plate, b.plate));
+}
+
 /** El código generado, con su vencimiento. Al vencer se borra de la pantalla: es de un solo uso y de corta vida. */
 function PairingResult({ code, plate }: { code: PairingCode; plate: string }) {
   const [expired, setExpired] = useState(false);
+  // El vencimiento es hora del SERVIDOR: se mide con su desfase, no con el reloj del navegador (que puede estar adelantado o atrasado).
+  const { fleetStore } = useServices();
   useEffect(() => {
-    const id = setTimeout(() => setExpired(true), Math.max(0, Date.parse(code.expiresAt) - Date.now()));
+    const serverNow = serverNowMs(fleetStore.getState().serverOffsetMs, Date.now());
+    const id = setTimeout(() => setExpired(true), msUntil(code.expiresAt, serverNow));
     return () => clearTimeout(id);
-  }, [code.expiresAt]);
+  }, [code.expiresAt, fleetStore]);
 
   if (expired) return <PanelNote>El código para {plate} venció. Genera uno nuevo.</PanelNote>;
   return (
@@ -32,12 +56,10 @@ function PairingResult({ code, plate }: { code: PairingCode; plate: string }) {
 /** Vinculación de un dispositivo: el operador genera un código para un vehículo de su flota (`POST /v1/devices/pairing-codes`). */
 export function PairingPanel() {
   const { api } = useServices();
-  const vehicles = useFleet((state) => state.vehicles);
   const ready = useFleet((state) => state.ready);
-  const options = useMemo(
-    () => Object.values(vehicles).map((vehicle) => ({ vehicleId: vehicle.vehicleId, plate: vehicle.plate })).sort((a, b) => byPlate.compare(a.plate, b.plate)),
-    [vehicles],
-  );
+  // Solo id y placa, a la cadencia del mapa: un cambio de posición no recalcula ni re-renderiza el selector.
+  const keys = useThrottledFleet(selectVehicleKeys, PANEL_THROTTLE_MS, shallow);
+  const options = useMemo(() => pairingOptions(keys), [keys]);
   const [vehicleId, setVehicleId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
