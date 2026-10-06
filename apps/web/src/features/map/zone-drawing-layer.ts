@@ -2,7 +2,7 @@ import type { AddLayerObject, GeoJSONSource, Map as MapLibreMap } from "maplibre
 import { mapMarker } from "../../design/tokens";
 import { buildDraftFeatures } from "../zones/draft-features";
 import { canClose, verticesOf } from "../zones/zone-drawing";
-import type { ZoneDrawingStore } from "../zones/zone-drawing-store";
+import { isDrawing, type ZoneDrawingStore } from "../zones/zone-drawing-store";
 import type { StoreApi } from "zustand/vanilla";
 
 export const DRAFT_SOURCE_ID = "fleet-zone-draft";
@@ -34,6 +34,20 @@ const draftLayers: AddLayerObject[] = [
     },
   },
 ];
+
+/** Envuelve un handler del mapa para que se ignore mientras se dibuja una zona (los clics agregan vértices, no seleccionan vehículos). */
+export const unlessDrawing =
+  <Args extends unknown[]>(store: StoreApi<ZoneDrawingStore>, handler: (...args: Args) => void) =>
+  (...args: Args): void => {
+    if (!isDrawing(store.getState())) handler(...args);
+  };
+
+/** ¿El foco está en un campo editable? Con Esc en un campo (fuera del panel de zonas) no se cancela el dibujo. */
+function isEditableOutsidePanel(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const editable = target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+  return editable && target.closest("#zones-body") === null;
+}
 
 /**
  * Capa de dibujo de zonas sobre el mapa: una fuente GeoJSON propia con línea, vértices y relleno de vista previa. En modo dibujo el clic
@@ -95,11 +109,23 @@ export function attachZoneDrawing(map: MapLibreMap, store: StoreApi<ZoneDrawingS
   });
   const onKeyDown = (event: KeyboardEvent) => {
     // Solo mientras se coloca puntos: con el formulario abierto (anillo cerrado) Esc no debe borrar lo escrito.
-    if (event.key === "Escape" && phase() === "drawing") store.getState().cancel();
+    if (event.key !== "Escape" || phase() !== "drawing") return;
+    // Esc que otro componente ya atendió (cerrar un menú) o que se escribe en un campo ajeno no cancela el dibujo.
+    if (event.defaultPrevented || isEditableOutsidePanel(event.target)) return;
+    store.getState().cancel();
   };
   window.addEventListener("keydown", onKeyDown);
 
   applyMode(phase() !== "idle");
+  // Pinta ya lo que haya (un dibujo en curso al montar la capa).
+  schedule();
+  // Con la capa lista el panel puede ofrecer "Nueva zona" y "Agregar punto en el centro del mapa".
+  store.getState().setMapControl({
+    center: () => {
+      const center = map.getCenter();
+      return [center.lng, center.lat];
+    },
+  });
   const unsubscribe = store.subscribe((state, previous) => {
     if (state.drawing === previous.drawing) return;
     if ((state.drawing.phase === "idle") !== (previous.drawing.phase === "idle")) applyMode(state.drawing.phase !== "idle");
@@ -109,6 +135,7 @@ export function attachZoneDrawing(map: MapLibreMap, store: StoreApi<ZoneDrawingS
 
   return () => {
     unsubscribe();
+    store.getState().setMapControl(null);
     window.removeEventListener("keydown", onKeyDown);
     for (const subscription of [onClick, onDoubleClick, onMove, onOut]) subscription.unsubscribe();
     if (frame !== 0) cancelAnimationFrame(frame);

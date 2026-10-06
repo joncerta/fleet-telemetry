@@ -31,6 +31,8 @@ export interface FleetSyncOptions {
 export interface FleetSync {
   start(): void;
   stop(): void;
+  /** Vuelve a leer las zonas (tras crear una, o ante un 409 o un corte de red). Invalida cualquier lectura de zonas en vuelo. */
+  reloadZones(): void;
 }
 
 const messageOf = (error: unknown): string =>
@@ -174,6 +176,9 @@ export function createFleetSync(options: FleetSyncOptions): FleetSync {
         void loadSummary();
         void loadStopped();
       }, refreshMs);
+    },
+    reloadZones() {
+      if (!stopped) void loadZones();
     },
     stop() {
       if (stopped) return;

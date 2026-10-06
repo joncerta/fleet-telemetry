@@ -43,4 +43,36 @@ describe("zoneDrawingStore", () => {
     store.getState().cancel();
     expect(store.getState().drawing.phase).toBe("idle");
   });
+
+  it("reset vuelve a idle incluso guardando (cancel no)", () => {
+    const store = createZoneDrawingStore();
+    store.getState().start();
+    for (const vertex of [
+      [-74, 4],
+      [-73, 4],
+      [-73, 5],
+    ] as const)
+      store.getState().addVertex(vertex);
+    store.getState().close();
+    store.getState().beginSave();
+    store.getState().cancel();
+    expect(store.getState().drawing.phase).toBe("saving");
+    store.getState().reset();
+    expect(store.getState().drawing.phase).toBe("idle");
+  });
+
+  it("agrega un vértice en el centro del mapa registrado; sin mapa no hace nada", () => {
+    const store = createZoneDrawingStore();
+    store.getState().start();
+    store.getState().addVertexAtCenter();
+    expect(store.getState().drawing).toMatchObject({ vertices: [] });
+    store.getState().setMapControl({ center: () => [-74.1, 4.65] });
+    store.getState().addVertexAtCenter();
+    expect(store.getState().drawing).toMatchObject({ vertices: [[-74.1, 4.65]] });
+    // Reintentar en el mismo centro no duplica el punto.
+    store.getState().addVertexAtCenter();
+    expect(store.getState().drawing).toMatchObject({ vertices: [[-74.1, 4.65]] });
+    store.getState().reset();
+    expect(store.getState().mapControl).not.toBeNull();
+  });
 });

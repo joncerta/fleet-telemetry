@@ -2,12 +2,24 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import * as machine from "./zone-drawing";
 import type { DrawingState, Position } from "./zone-drawing";
 
+/** Lo que el panel necesita del mapa. */
+export interface MapControl {
+  center(): Position;
+}
+
 export interface ZoneDrawingStore {
   readonly drawing: DrawingState;
   start(): void;
   addVertex(vertex: Position): void;
   undo(): void;
   cancel(): void;
+  /** Vuelve a `idle` incluso guardando (fin de sesión, desmontaje). */
+  reset(): void;
+  /** Lo registra el mapa al estar listo: sin él (cargando, sin WebGL) no se puede dibujar. */
+  mapControl: MapControl | null;
+  setMapControl(control: MapControl | null): void;
+  /** Agrega un vértice en el centro del mapa (alternativa con teclado: el mapa se mueve con las flechas). */
+  addVertexAtCenter(): void;
   close(): void;
   beginSave(): void;
   saveFailed(): void;
@@ -31,6 +43,13 @@ export function createZoneDrawingStore(): StoreApi<ZoneDrawingStore> {
       addVertex: (vertex) => apply((state) => machine.addVertex(state, vertex)),
       undo: () => apply(machine.undo),
       cancel: () => apply(machine.cancel),
+      reset: () => apply(machine.reset),
+      mapControl: null,
+      setMapControl: (control) => set({ mapControl: control }),
+      addVertexAtCenter: () => {
+        const center = get().mapControl?.center();
+        if (center !== undefined) apply((state) => machine.addVertex(state, center));
+      },
       close: () => apply(machine.close),
       beginSave: () => apply(machine.beginSave),
       saveFailed: () => apply(machine.saveFailed),

@@ -10,7 +10,9 @@ import {
   hasSelfIntersection,
   isInsideColombia,
   IDLE,
+  reset,
   ringOf,
+  signedArea,
   saved,
   saveFailed,
   segmentsIntersect,
@@ -180,6 +182,42 @@ describe("validaciones locales", () => {
     expect(addVertex(state, circle(ZONE_MAX_VERTICES))).toMatchObject({ issue: "max_vertices" });
     const closed = close(state);
     expect(ringOf(closed)).toHaveLength(ZONE_MAX_VERTICES + 1);
+  });
+});
+
+describe("geometría degenerada", () => {
+  it("área con signo: positiva antihoraria, negativa horaria, cero en línea recta", () => {
+    expect(signedArea([A, B, C])).toBeGreaterThan(0);
+    expect(signedArea([C, B, A])).toBeLessThan(0);
+    expect(signedArea([[-74, 4], [-73, 4], [-72, 4]])).toBe(0);
+  });
+
+  it("no cierra tres puntos colineales (área cero) y avisa", () => {
+    const line = draw([-74, 4], [-73, 4], [-72, 4]);
+    expect(verticesOf(line)).toHaveLength(3);
+    expect(close(line)).toMatchObject({ phase: "drawing", issue: "zero_area" });
+  });
+
+  it("no cierra puntos casi colineales con área minúscula", () => {
+    expect(close(draw([-74, 4], [-73, 4], [-72, 4 + 1e-15]))).toMatchObject({ issue: "zero_area" });
+  });
+
+  it("rechaza volver sobre el tramo contiguo aunque pase del inicio (colineal y del mismo lado)", () => {
+    const base = draw([-74, 4], [-73, 4]);
+    expect(addVertex(base, [-73.5, 4])).toMatchObject({ issue: "self_intersection" });
+    expect(addVertex(base, [-75, 4])).toMatchObject({ issue: "self_intersection" });
+  });
+
+  it("seguir recto sobre la misma línea es válido", () => {
+    const next = addVertex(draw([-74, 4], [-73, 4]), [-72, 4]);
+    expect(next).toMatchObject({ phase: "drawing", issue: null });
+    expect(verticesOf(next)).toHaveLength(3);
+  });
+
+  it("reset vuelve a idle desde cualquier fase, también guardando", () => {
+    const saving = beginSave(close(draw(A, B, C)));
+    expect(reset()).toBe(IDLE);
+    expect(cancel(saving)).toBe(saving);
   });
 });
 
