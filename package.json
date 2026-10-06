@@ -17,6 +17,7 @@
     "db:migrate": "tsx --env-file-if-exists=.env packages/platform/src/cli/migrate.ts",
     "db:rollback": "tsx --env-file-if-exists=.env packages/platform/src/cli/rollback.ts",
     "db:status": "tsx --env-file-if-exists=.env packages/platform/src/cli/status.ts",
+    "db:evidence": "tsx --env-file-if-exists=.env tools/dev-data/src/cli/evidence.ts",
     "db:seed": "tsx --env-file-if-exists=.env tools/dev-data/src/cli/seed.ts",
     "simulate": "tsx --env-file-if-exists=.env tools/simulator/src/main.ts",
     "device:token": "tsx --env-file-if-exists=.env tools/dev-data/src/cli/device-token.ts"
