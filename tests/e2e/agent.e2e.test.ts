@@ -309,10 +309,12 @@ describe("POST /v1/chat: aislamiento entre tenants y sesión", () => {
     expect(health.status).toBe(200);
     expect(agentHealthResponseSchema.parse(await health.json())).toEqual({
       status: "ok",
-      checks: { fleetApi: "up" },
-      dependencies: { fleetApi: { breaker: "closed" } },
+      checks: { fleetApi: "up", model: "up" },
+      dependencies: { fleetApi: { breaker: "closed" }, model: { breaker: "closed" } },
     });
-    expect((await fetch(`${agentUrl}/health/live`)).status).toBe(200);
+    const live = await fetch(`${agentUrl}/health/live`);
+    expect(live.status).toBe(200);
+    expect(await live.json()).toEqual({ status: "ok" });
   });
 });
 
@@ -349,8 +351,8 @@ describe("circuit breaker hacia fleet-api", () => {
       expect(health.status).toBe(503);
       expect(agentHealthResponseSchema.parse(await health.json())).toEqual({
         status: "degraded",
-        checks: { fleetApi: "down" },
-        dependencies: { fleetApi: { breaker: "open" } },
+        checks: { fleetApi: "down", model: "up" },
+        dependencies: { fleetApi: { breaker: "open" }, model: { breaker: "closed" } },
       });
       // El agente sigue vivo aunque fleet-api no esté.
       expect((await fetch(`${agentUrl}/health/live`)).status).toBe(200);

@@ -78,13 +78,14 @@ function makeFeed() {
   const publish = vi.fn((tenantId: string, event: FleetStreamEvent) => void published.push({ tenantId, event }));
   const lines: string[] = [];
   const logger = createLogger({ service: "fleet-api-test", level: "debug", destination: { write: (line: string) => void lines.push(line) } });
-  const feed = createFleetEventFeed({ consumer, groupId: GROUP, topics: TOPICS, publish, logger });
+  const onFatal = vi.fn<(reason: string) => void>();
+  const feed = createFleetEventFeed({ consumer, groupId: GROUP, topics: TOPICS, publish, logger, onFatal });
   const deliver = (message: FeedMessage) => {
     if (eachMessage === undefined) throw new Error("el feed no ha arrancado");
     return eachMessage(message);
   };
-  const emit = (event: string, type: string) => listeners.get(event)?.({ type, payload: {} });
-  return { feed, calls, runConfigs, failConnect: (error: Error) => void (connectError = error), published, publish, deliver, emit, logs: () => lines.join("") };
+  const emit = (event: string, type: string, payload: unknown = {}) => listeners.get(event)?.({ type, payload });
+  return { feed, calls, runConfigs, onFatal, failConnect: (error: Error) => void (connectError = error), published, publish, deliver, emit, logs: () => lines.join("") };
 }
 
 describe("arranque", () => {
@@ -191,6 +192,56 @@ describe("eventos inválidos", () => {
   });
 });
 
+describe("CRASH: un consumer caído sin reinicio deja un proceso vivo que no entrega eventos", () => {
+  const crash = (restart: unknown) => ({ error: new Error("el consumer se cayó"), groupId: GROUP, restart });
+
+  it("con restart: false llama a onFatal para que el proceso se apague y el orquestador lo reinicie", async () => {
+    const { feed, emit, onFatal, logs } = makeFeed();
+    await feed.start();
+
+    emit("consumer.crash", "consumer.crash", crash(false));
+
+    expect(onFatal).toHaveBeenCalledOnce();
+    expect(onFatal).toHaveBeenCalledWith(expect.stringMatching(/consumer/i));
+    expect(feed.isReady()).toBe(false);
+    expect(logs()).toContain("NO lo reinicia");
+  });
+
+  it("con restart: true kafkajs ya lo reinicia: solo deja de estar listo, sin apagar el proceso", async () => {
+    const { feed, emit, onFatal } = makeFeed();
+    await feed.start();
+
+    emit("consumer.crash", "consumer.crash", crash(true));
+
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(feed.isReady()).toBe(false);
+  });
+
+  // Falla en cerrado: si no se puede leer el payload no se sabe si kafkajs reinicia, y es preferible reiniciar el proceso.
+  it.each([
+    ["sin restart", { error: new Error("x"), groupId: GROUP }],
+    ["restart que no es booleano", crash("true")],
+    ["error como texto", { error: "texto", groupId: GROUP, restart: true }],
+    ["sin payload", undefined],
+  ])("con un payload ilegible (%s) llama a onFatal", async (_label, payload) => {
+    const { feed, emit, onFatal } = makeFeed();
+    await feed.start();
+
+    emit("consumer.crash", "consumer.crash", payload);
+
+    expect(onFatal).toHaveBeenCalledOnce();
+  });
+
+  it("un evento de otro tipo en CRASH se ignora", async () => {
+    const { feed, emit, onFatal } = makeFeed();
+    await feed.start();
+
+    emit("consumer.crash", "otro.evento", crash(false));
+
+    expect(onFatal).not.toHaveBeenCalled();
+  });
+});
+
 describe("estado de salud", () => {
   it("no está listo antes de arrancar, lo está al arrancar, cae con un rebalanceo o un crash y vuelve al unirse al grupo", async () => {
     const { feed, emit } = makeFeed();
@@ -204,7 +255,7 @@ describe("estado de salud", () => {
     emit("consumer.group_join", "consumer.group_join");
     expect(feed.isReady()).toBe(true);
 
-    emit("consumer.crash", "consumer.crash");
+    emit("consumer.crash", "consumer.crash", { error: new Error("x"), groupId: GROUP, restart: true });
     expect(feed.isReady()).toBe(false);
     emit("consumer.group_join", "consumer.group_join");
     expect(feed.isReady()).toBe(true);

@@ -1,6 +1,6 @@
 import type { ApiError } from "@fleet/contracts";
 import { hasZodFastifySchemaValidationErrors, isResponseSerializationError } from "fastify-type-provider-zod";
-import { InvalidCredentialsError, InvalidPairingCodeError, SessionInvalidError, VehicleNotFoundError } from "../../application/errors.js";
+import { InvalidCredentialsError, InvalidPairingCodeError, ServerDrainingError, SessionInvalidError, VehicleNotFoundError } from "../../application/errors.js";
 import { InvalidCursorError } from "./alert-cursor.js";
 
 export interface MappedError {
@@ -39,6 +39,9 @@ const BY_STATUS: Readonly<Record<number, () => MappedError>> = {
   429: () => apiError(429, "rate_limited", "Demasiadas peticiones. Reintenta más tarde."),
 };
 
+/** Segundos que se le pide esperar al cliente ante un `503` por apagado: lo que tarda el orquestador en levantar otra tarea. */
+export const DRAINING_RETRY_AFTER_SECONDS = 5;
+
 export const notFoundError = (): MappedError => NOT_FOUND();
 
 function statusOf(error: unknown): number | undefined {
@@ -59,6 +62,7 @@ function codeOf(error: unknown): string | undefined {
  * - cursor de paginación inválido -> `400 invalid_cursor`;
  * - credenciales inválidas o sesión que ya no vale -> `401 unauthorized` (el mismo, sin distinguir el motivo);
  * - vehículo ajeno o inexistente -> `404 not_found`;
+ * - réplica apagándose (sin streams nuevos) -> `503 shutting_down` con `Retry-After`;
  * - código de vinculación inexistente, usado o vencido -> `404 invalid_pairing_code` (el mismo para los tres);
  * - errores de Fastify con código conocido o estado 4xx -> su código de API;
  * - cualquier otra cosa (incluido un fallo al serializar la respuesta o un error de `pg`) -> `500 internal_error`.
@@ -69,6 +73,9 @@ export function mapError(error: unknown): MappedError {
   if (error instanceof InvalidCursorError) return apiError(400, "invalid_cursor", "El cursor de paginación no es válido.");
   if (error instanceof InvalidCredentialsError || error instanceof SessionInvalidError) return UNAUTHORIZED();
   if (error instanceof VehicleNotFoundError) return NOT_FOUND();
+  if (error instanceof ServerDrainingError) {
+    return { ...apiError(503, "shutting_down", "El servidor se está reiniciando. Reintenta en unos segundos."), headers: { "retry-after": String(DRAINING_RETRY_AFTER_SECONDS) } };
+  }
   if (error instanceof InvalidPairingCodeError) return apiError(404, "invalid_pairing_code", "El código no es válido o ya venció.");
 
   const code = codeOf(error);

@@ -1,5 +1,6 @@
 import { loadConfig, logConfig, sessionSecretConfig, shutdownConfig, type Env } from "@fleet/platform";
 import { z } from "zod";
+import { modelCallDeadlineMs } from "./domain/model-limits.js";
 
 /** Modelo por defecto del agente real. */
 export const DEFAULT_AGENT_MODEL = "claude-sonnet-5-5";
@@ -39,6 +40,10 @@ const agentConfig = z.object({
   AGENT_MODEL: z.string().min(1).default(DEFAULT_AGENT_MODEL),
   // Puede venir vacía (el .env.example la deja así): solo importa con el proveedor real.
   ANTHROPIC_API_KEY: z.string().optional(),
+  // Tiempo máximo de UNA llamada al proveedor del modelo (`clientOptions.timeout`), en ms.
+  AGENT_MODEL_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(20_000),
+  // Llamadas simultáneas al proveedor del modelo en esta réplica (cola por encima de ese tope).
+  AGENT_MODEL_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(4),
   // Pasos (llamada al modelo + herramientas) permitidos por pregunta.
   AGENT_MAX_ITERATIONS: z.coerce.number().int().min(1).max(20).default(6),
   // Tiempo total de una pregunta, en ms.
@@ -51,7 +56,7 @@ const agentConfig = z.object({
   // Preguntas por usuario y ventana: cada una cuesta una llamada al modelo.
   AGENT_USER_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1_000_000).default(20),
   AGENT_USER_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
-  // Circuit breaker hacia fleet-api.
+  // Circuit breaker hacia fleet-api (y, con los mismos umbrales, hacia el proveedor del modelo; el timeout de esa llamada es AGENT_MODEL_TIMEOUT_MS).
   AGENT_FLEET_API_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(3_000),
   AGENT_BREAKER_ERROR_THRESHOLD_PERCENTAGE: z.coerce.number().int().min(1).max(100).default(50),
   AGENT_BREAKER_VOLUME_THRESHOLD: z.coerce.number().int().min(1).max(1_000).default(5),
@@ -67,6 +72,15 @@ export const configSchema = z
     ...agentConfig.shape,
   })
   .superRefine((config, context) => {
+    // Una llamada al modelo (con su reintento y backoff) tiene que caber en el tiempo total de la pregunta: si no, el tiempo total vence antes
+    // que el deadline de la llamada y el breaker nunca ve el fallo.
+    if (modelCallDeadlineMs(config.AGENT_MODEL_TIMEOUT_MS) >= config.AGENT_TIMEOUT_MS) {
+      context.addIssue({
+        code: "custom",
+        path: ["AGENT_MODEL_TIMEOUT_MS"],
+        message: "AGENT_MODEL_TIMEOUT_MS × (reintentos + 1) + el presupuesto de backoff debe ser menor que AGENT_TIMEOUT_MS",
+      });
+    }
     // El proveedor real exige la clave; el de guion no la usa.
     if (config.AGENT_MODEL_PROVIDER === "anthropic" && (config.ANTHROPIC_API_KEY === undefined || config.ANTHROPIC_API_KEY === "")) {
       context.addIssue({ code: "custom", path: ["ANTHROPIC_API_KEY"], message: "ANTHROPIC_API_KEY es obligatoria con AGENT_MODEL_PROVIDER=anthropic" });

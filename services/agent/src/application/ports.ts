@@ -49,7 +49,10 @@ export interface AgentRun {
   readonly toolCalls: readonly ToolCallRecord[];
 }
 
-/** El agente: modelo + herramientas. Lanza `AgentTimeoutError` o `AgentFailedError`; nunca otra cosa. */
+/**
+ * El agente: modelo + herramientas. Lanza `AgentTimeoutError`, `AgentCancelledError` (el `signal` se abortó: el cliente cerró la conexión)
+ * o `AgentFailedError`; nunca otra cosa.
+ */
 export interface ChatAgent {
-  run(input: { context: UserContext; message: string }): Promise<AgentRun>;
+  run(input: { context: UserContext; message: string; signal?: AbortSignal | undefined }): Promise<AgentRun>;
 }

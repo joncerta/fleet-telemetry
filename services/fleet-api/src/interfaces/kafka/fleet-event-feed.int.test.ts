@@ -106,6 +106,7 @@ function makeReplica(instanceId: string): Replica {
     topics: { vehicleState: stateTopic.name, fleetAlerts: alertsTopic.name },
     publish: hub.publish,
     logger,
+    onFatal: () => undefined,
   });
   return {
     feed,

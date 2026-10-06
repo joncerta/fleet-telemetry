@@ -66,4 +66,14 @@ describe("agentHealthResponseSchema", () => {
 
     expect(parsed.dependencies.fleetApi.breaker).toBe("unknown");
   });
+
+  it("incluye el breaker del proveedor del modelo (aditivo: un agente anterior que no lo envía sigue parseando)", () => {
+    const withModel = { ...health, dependencies: { fleetApi: { breaker: "closed" }, model: { breaker: "halfOpen" } } };
+
+    expect(agentHealthResponseSchema.parse(withModel).dependencies.model?.breaker).toBe("halfOpen");
+    expect(agentHealthResponseSchema.safeParse({ ...health, dependencies: { fleetApi: { breaker: "closed" }, model: { breaker: "x" } } }).success).toBe(false);
+    expect(agentHealthResponseTolerantSchema.parse({ ...withModel, dependencies: { ...withModel.dependencies, model: { breaker: "x" } } }).dependencies.model?.breaker).toBe("unknown");
+    // Mensaje de la versión anterior (sin `model`).
+    expect(agentHealthResponseSchema.parse(health).dependencies.model).toBeUndefined();
+  });
 });

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ZoneKind } from "@fleet/contracts";
-import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { BaseChatModel, type BindToolsInput } from "@langchain/core/language_models/chat_models";
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ChatResult } from "@langchain/core/outputs";
 import { z } from "zod";
@@ -138,8 +138,16 @@ export class ScriptedChatModel extends BaseChatModel {
     return "scripted";
   }
 
-  /** Las herramientas ya las conoce el guion: no hay nada que enlazar. */
-  override bindTools(): this {
+  /** Las herramientas que `createAgent` le enlazó (los tests comprueban que se las pasó). Las decisiones las toma el guion, no ellas. */
+  boundTools: readonly BindToolsInput[] = [];
+
+  /** Nombres de las herramientas enlazadas (las que tienen nombre). */
+  boundToolNames(): string[] {
+    return this.boundTools.flatMap((tool) => (typeof tool === "object" && "name" in tool && typeof tool.name === "string" ? [tool.name] : []));
+  }
+
+  override bindTools(tools: BindToolsInput[]): this {
+    this.boundTools = tools;
     return this;
   }
 

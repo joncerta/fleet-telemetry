@@ -27,7 +27,11 @@ export interface OpenFleetStreamContext {
   readonly correlationId: string;
 }
 
-export type OpenFleetStreamResult = { readonly status: "opened" } | { readonly status: "too_many_streams"; readonly limit: number };
+export type OpenFleetStreamResult =
+  | { readonly status: "opened" }
+  | { readonly status: "too_many_streams"; readonly limit: number }
+  /** La réplica se está apagando (`closeAll` ya corrió): no se abren streams nuevos. El cliente reconecta a otra réplica. */
+  | { readonly status: "draining" };
 
 export type CloseReason = "open_failed" | "client_closed" | "slow_client" | "buffer_overflow" | "delivery_failed" | "shutdown";
 
@@ -43,7 +47,11 @@ export interface OpenFleetStream {
    * 7. sigue en vivo con `id: seq`. Los pasos 4 a 7 no tienen `await`: ningún evento se cuela entre el snapshot y el vaciado.
    */
   readonly open: (context: OpenFleetStreamContext, attach: () => FleetStreamSink) => Promise<OpenFleetStreamResult>;
-  /** Corta todos los streams abiertos (apagado ordenado: antes de cerrar el servidor HTTP, que no los espera). */
+  /**
+   * Corta todos los streams abiertos (apagado ordenado: antes de cerrar el servidor HTTP, que no los espera) y pasa a estado DRAINING: los
+   * `open` siguientes devuelven `draining` sin tocar nada. Sin esto, los clientes que acaban de ser cortados reconectan en el acto a esta misma
+   * réplica, que sigue aceptando conexiones hasta cerrar el servidor, y el apagado nunca termina de vaciarse.
+   */
   readonly closeAll: () => void;
 }
 
@@ -73,10 +81,12 @@ export function createOpenFleetStream(deps: OpenFleetStreamDeps): OpenFleetStrea
   const streamsByUser = new Map<string, number>();
   const streamsByTenant = new Map<string, number>();
   const active = new Set<(reason: CloseReason) => void>();
+  let draining = false;
 
   return {
     async open(context, attach) {
       const { userId, tenantId } = context.identity;
+      if (draining) return { status: "draining" };
       if ((streamsByUser.get(userId) ?? 0) >= limits.maxStreamsPerUser) {
         logger.warn({ tenantId, correlationId: context.correlationId, limit: limits.maxStreamsPerUser }, "Stream SSE rechazado: límite por usuario");
         return { status: "too_many_streams", limit: limits.maxStreamsPerUser };
@@ -150,6 +160,11 @@ export function createOpenFleetStream(deps: OpenFleetStreamDeps): OpenFleetStrea
         // 3) El snapshot, de una transacción.
         const data = await snapshots.read(tenantId);
         const cursor = snapshotCursor(data.vehicles, data.alerts);
+        // El apagado empezó mientras se leía el snapshot: no se entrega la conexión (la entrada HTTP aún puede responder 503 sin `hijack`).
+        if (draining) {
+          release("shutdown");
+          return { status: "draining" };
+        }
         tracker = createSeqTracker(data);
         snapshotMessage = {
           event: SSE_EVENTS.snapshot,
@@ -184,6 +199,7 @@ export function createOpenFleetStream(deps: OpenFleetStreamDeps): OpenFleetStrea
     },
 
     closeAll() {
+      draining = true;
       for (const close of [...active]) close("shutdown");
     },
   };

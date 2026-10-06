@@ -2,11 +2,15 @@ import { randomUUID } from "node:crypto";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { ChatResult } from "@langchain/core/outputs";
-import { describe, expect, it } from "vitest";
-import { AgentFailedError, AgentTimeoutError } from "../application/errors.js";
+import { describe, expect, it, vi } from "vitest";
+import { AgentCancelledError, AgentFailedError, AgentTimeoutError } from "../application/errors.js";
 import { SYSTEM_PROMPT } from "../application/system-prompt.js";
 import { B1_QUESTION, CONTEXT, makeFleet, makeScriptedAgent } from "../testing/fakes.js";
-import { createLangChainChatAgent, delimitQuestion } from "./langchain-chat-agent.js";
+import { createLangChainChatAgent, delimitQuestion, type ModelUsage } from "./langchain-chat-agent.js";
+import { createGuardedChatModel } from "./guarded-chat-model.js";
+import { ScriptedChatModel } from "./scripted-chat-model.js";
+import { TOOL_NAMES } from "../application/tool-names.js";
+import type { UserContext } from "../application/ports.js";
 import { createFleetTools } from "../interfaces/agent/tools.js";
 import { createGetActiveAlerts } from "../application/get-active-alerts.js";
 import { createGetFleetSummary } from "../application/get-fleet-summary.js";
@@ -37,7 +41,7 @@ class StubModel extends BaseChatModel {
   }
 }
 
-function agentWith(model: BaseChatModel, options: { maxIterations?: number; timeoutMs?: number } = {}) {
+function agentWith(model: BaseChatModel, options: { maxIterations?: number; timeoutMs?: number; onUsage?: (usage: ModelUsage, context: UserContext) => void } = {}) {
   const fleet = makeFleet();
   const useCases = {
     getStoppedVehicles: createGetStoppedVehicles({ fleet }),
@@ -49,6 +53,8 @@ function agentWith(model: BaseChatModel, options: { maxIterations?: number; time
     systemPrompt: SYSTEM_PROMPT,
     maxIterations: options.maxIterations ?? 6,
     timeoutMs: options.timeoutMs ?? 10_000,
+    modelName: "stub-model",
+    ...(options.onUsage !== undefined && { onUsage: options.onUsage }),
     toolsFor: ({ context, record }) => createFleetTools({ ...useCases, context, record, onError: () => undefined }),
   });
 }
@@ -113,6 +119,7 @@ describe("createLangChainChatAgent", () => {
       systemPrompt: SYSTEM_PROMPT,
       maxIterations: 2,
       timeoutMs: 10_000,
+      modelName: "stub-model",
       toolsFor: ({ context, record }) =>
         createFleetTools({
           getStoppedVehicles: createGetStoppedVehicles({ fleet }),
@@ -155,5 +162,68 @@ describe("createLangChainChatAgent", () => {
     expect(second.toolCalls.map((call) => call.name)).toEqual(["get_fleet_summary"]);
     expect(fleet.stoppedVehicles.mock.calls[0]?.[0]).toBe(CONTEXT);
     expect(fleet.fleetSummary.mock.calls[0]?.[0]).toBe(other);
+  });
+
+  it("suma usage_metadata de todas las respuestas del modelo y lo reporta con el nombre del modelo, sin texto", async () => {
+    const usage = (input: number, output: number) => ({ input_tokens: input, output_tokens: output, total_tokens: input + output });
+    const replies = [
+      new AIMessage({ content: "", tool_calls: [{ type: "tool_call", id: randomUUID(), name: "get_fleet_summary", args: {} }], usage_metadata: usage(100, 20) }),
+      new AIMessage({ content: "Listo.", usage_metadata: usage(150, 30) }),
+    ];
+    const model = new StubModel(() => Promise.resolve(replies.shift() ?? new AIMessage("fin")));
+    const onUsage = vi.fn<(usage: ModelUsage, context: UserContext) => void>();
+
+    await agentWith(model, { onUsage }).run({ context: CONTEXT, message: "resumen" });
+
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({ model: "stub-model", inputTokens: 250, outputTokens: 50 }, CONTEXT);
+  });
+
+  it("si el cliente cancela, la corrida se aborta (el modelo recibe el abort) y sale como AgentCancelledError", async () => {
+    let modelSignal: AbortSignal | undefined;
+    const model = new StubModel(
+      (_messages, signal) =>
+        new Promise<AIMessage>((_resolve, reject) => {
+          modelSignal = signal;
+          signal?.addEventListener("abort", () => reject(new Error("abortado")));
+        }),
+    );
+    const controller = new AbortController();
+
+    const running = agentWith(model).run({ context: CONTEXT, message: "hola", signal: controller.signal }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(modelSignal).toBeDefined());
+    controller.abort();
+
+    expect(await running).toBeInstanceOf(AgentCancelledError);
+    expect(modelSignal?.aborted).toBe(true);
+  });
+
+  it("con el breaker del modelo abierto la pregunta falla al instante (AgentFailedError) y NO se llama al modelo", async () => {
+    const inner = new StubModel(() => Promise.reject(Object.assign(new Error("overloaded"), { status: 529 })));
+    const guarded = createGuardedChatModel({
+      model: inner,
+      maxConcurrency: 4,
+      breaker: { timeoutMs: 5_000, errorThresholdPercentage: 50, volumeThreshold: 2, resetTimeoutMs: 60_000, rollingWindowMs: 10_000 },
+    });
+    try {
+      const agent = agentWith(guarded);
+      await agent.run({ context: CONTEXT, message: "hola" }).catch(() => undefined);
+      await agent.run({ context: CONTEXT, message: "hola" }).catch(() => undefined);
+      expect(guarded.breakerState()).toBe("open");
+      const callsWhenOpened = inner.seen.length;
+
+      await expect(agent.run({ context: CONTEXT, message: "hola" })).rejects.toBeInstanceOf(AgentFailedError);
+
+      expect(inner.seen.length).toBe(callsWhenOpened);
+    } finally {
+      guarded.shutdown();
+    }
+  });
+
+  it("createAgent le pasa al modelo las tres herramientas del agente (y solo esas)", async () => {
+    const model = new ScriptedChatModel();
+
+    await agentWith(model).run({ context: CONTEXT, message: B1_QUESTION });
+
+    expect(model.boundToolNames().sort()).toEqual(Object.values(TOOL_NAMES).sort());
   });
 });

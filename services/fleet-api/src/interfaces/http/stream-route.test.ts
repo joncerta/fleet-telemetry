@@ -215,6 +215,89 @@ describe("contenido del stream", () => {
   });
 });
 
+describe("reconexión del cliente (retry)", () => {
+  it("el PRIMER frame (el snapshot) lleva retry = base + jitter, y los siguientes no", async () => {
+    const { hub, sessionCookieOf, connect } = await makeApp({ reconnect: { baseMs: 3_000, jitterMs: 4_000 }, random: () => 0.5 });
+    const stream = await connect({ cookie: sessionCookieOf(NORTE) });
+
+    const first = await stream.next();
+    hub.publish(NORTE.tenantId, { type: "vehicle.state", state: vehicleAt("9") });
+    const next = await stream.next();
+
+    expect(first).toMatchObject({ event: "snapshot", retry: 5_000 });
+    expect(next).toMatchObject({ event: "vehicle.state", retry: undefined });
+  });
+
+  it("el jitter reparte las reconexiones: con otro aleatorio, otro retry dentro de [base, base + jitter)", async () => {
+    const values = [0, 0.999];
+    const { sessionCookieOf, connect } = await makeApp({ reconnect: { baseMs: 1_000, jitterMs: 1_000 }, random: () => values.shift() ?? 0 });
+
+    const a = await (await connect({ cookie: sessionCookieOf(NORTE) })).next();
+    const b = await (await connect({ cookie: sessionCookieOf(NORTE) })).next();
+
+    expect(a.retry).toBe(1_000);
+    expect(b.retry).toBe(1_999);
+  });
+});
+
+describe("draining (apagado)", () => {
+  it("tras cerrar los streams, uno nuevo recibe 503 shutting_down con Retry-After y CORS, ANTES de hijack (JSON, sin leer el snapshot)", async () => {
+    const { fleetStream, sessionCookieOf, connect, url, snapshotRead } = await makeApp();
+    const open = await connect({ cookie: sessionCookieOf(NORTE) });
+    await open.next();
+    const readsBefore = snapshotRead.mock.calls.length;
+
+    fleetStream.closeAll();
+    expect(await open.closed()).toBe(true);
+    const rejected = await fetch(url, { headers: { cookie: sessionCookieOf(NORTE), origin: ALLOWED_ORIGIN } });
+
+    expect(rejected.status).toBe(503);
+    expect(apiErrorSchema.parse(await rejected.json()).error.code).toBe("shutting_down");
+    expect(rejected.headers.get("retry-after")).toBe("5");
+    expect(rejected.headers.get("content-type")).toContain("application/json");
+    expect(rejected.headers.get("access-control-allow-origin")).toBe(ALLOWED_ORIGIN);
+    expect(snapshotRead.mock.calls.length).toBe(readsBefore);
+  });
+
+  it("sin sesión sigue siendo 401 aunque la réplica se esté apagando", async () => {
+    const { fleetStream, app } = await makeApp();
+    fleetStream.closeAll();
+
+    const response = await app.inject({ method: "GET", url: "/v1/stream" });
+
+    expect(response.statusCode).toBe(401);
+  });
+});
+
+describe("límite de conexiones nuevas por usuario", () => {
+  it("cuenta por USUARIO y no por IP: el mismo usuario pasa el límite, otro usuario desde la misma IP no", async () => {
+    const { sessionCookieOf, connect, url } = await makeApp({ streamRateLimit: { max: 2, timeWindowMs: 60_000 } });
+    const cookie = sessionCookieOf(NORTE);
+
+    const first = await connect({ cookie });
+    const second = await connect({ cookie });
+    await first.next();
+    await second.next();
+    const blocked = await fetch(url, { headers: { cookie, origin: ALLOWED_ORIGIN } });
+    const other = await connect({ cookie: sessionCookieOf(SUR) });
+
+    expect(blocked.status).toBe(429);
+    expect(apiErrorSchema.parse(await blocked.json()).error.code).toBe("rate_limited");
+    expect(blocked.headers.get("retry-after")).not.toBeNull();
+    expect(blocked.headers.get("access-control-allow-origin")).toBe(ALLOWED_ORIGIN);
+    expect((await other.next()).event).toBe("snapshot");
+  });
+
+  it("sin sesión válida cuenta por IP: los 401 también agotan el límite", async () => {
+    const { app } = await makeApp({ streamRateLimit: { max: 2, timeWindowMs: 60_000 } });
+    const get = () => app.inject({ method: "GET", url: "/v1/stream", headers: { cookie: "fleet_session=basura" } });
+
+    expect((await get()).statusCode).toBe(401);
+    expect((await get()).statusCode).toBe(401);
+    expect((await get()).statusCode).toBe(429);
+  });
+});
+
 describe("heartbeat", () => {
   it("escribe `: heartbeat` cada heartbeatMs, como comentario (sin id ni data), y deja de hacerlo al cerrarse la conexión", async () => {
     const { sessionCookieOf, connect } = await makeApp({ heartbeatMs: 15_000 });
@@ -231,7 +314,7 @@ describe("heartbeat", () => {
     vi.advanceTimersByTime(15_000);
     const second = await stream.next();
 
-    expect(beat).toEqual({ id: undefined, event: undefined, data: undefined, comment: SSE_HEARTBEAT_COMMENT });
+    expect(beat).toEqual({ id: undefined, event: undefined, data: undefined, retry: undefined, comment: SSE_HEARTBEAT_COMMENT });
     expect(second.comment).toBe(SSE_HEARTBEAT_COMMENT);
 
     stream.close();

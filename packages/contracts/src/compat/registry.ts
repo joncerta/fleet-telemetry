@@ -118,6 +118,6 @@ export const contractRegistry: readonly ContractEntry[] = [
   { name: "chat-request", schema: chatRequestSchema, versions: [1] },
   { name: "chat-response", schema: chatResponseSchema, versions: [1] },
   { name: "chat-response-tolerant", schema: chatResponseTolerantSchema, versions: [1] },
-  { name: "agent-health-response", schema: agentHealthResponseSchema, versions: [1] },
-  { name: "agent-health-response-tolerant", schema: agentHealthResponseTolerantSchema, versions: [1] },
+  { name: "agent-health-response", schema: agentHealthResponseSchema, versions: [1, 2] },
+  { name: "agent-health-response-tolerant", schema: agentHealthResponseTolerantSchema, versions: [1, 2] },
 ];
