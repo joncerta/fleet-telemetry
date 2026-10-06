@@ -182,3 +182,6 @@ playwright/.cache/
 
 # Claude Code: preferencias locales de cada persona
 .claude/settings.local.json
+
+# Worktrees de los subagentes de Claude Code (cada uno es un checkout aparte)
+.claude/worktrees/
