@@ -13,7 +13,10 @@
     "@fleet/platform": "workspace:*"
   },
   "devDependencies": {
+    "@fleet/contracts": "workspace:*",
     "@fleet/eslint-config": "workspace:*",
+    "@fleet/ingest-gateway": "workspace:*",
+    "@fleet/processor": "workspace:*",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
     "eslint": "catalog:",
