@@ -58,7 +58,7 @@ pnpm simulate                          # 30 vehículos en Bogotá y Medellín
 - Abre `http://localhost:3000` y entra como `operador@norte.test` u `operador@sur.test`, con la contraseña `SEED_USER_PASSWORD` de tu `.env`.
 - En segundos el simulador deja dos vehículos por tenant detenidos más de 20 minutos en una zona crítica, uno con ubicación simulada y uno que deja de reportar.
 
-**Sistema completo en contenedores:** `docker compose --profile app up -d --wait`. Incluye `migrate`, `ingest-gateway`, `processor`, `fleet-api` y `agent`. *El Dockerfile de la web está pendiente, así que por ahora la web se levanta con `pnpm dev`.*
+**Sistema completo en contenedores:** `docker compose --profile app up -d --wait`. Incluye `migrate`, `ingest-gateway`, `processor`, `fleet-api`, `agent` y la web (<http://localhost:3000>). Las `NEXT_PUBLIC_*` de la web se fijan al compilar la imagen (por defecto apuntan a `localhost:4002` y `localhost:4003`): para otro origen hay que reconstruirla con `--build-arg`.
 
 **App móvil:**
 - El development build sale de `pnpm --filter @fleet/mobile exec expo run:android`. En Windows hay que activar las rutas largas o compilar desde una ruta corta.
@@ -102,7 +102,7 @@ Las reglas que no se negocian están en [`CLAUDE.md`](CLAUDE.md), entre ellas:
 
 - **Local:** [`docker-compose.yml`](docker-compose.yml).
   - Sin perfil levanta solo la infraestructura.
-  - `--profile app` levanta además los servicios, con un Dockerfile multi-stage, `pnpm deploy --prod` y usuario no root.
+  - `--profile app` levanta además los servicios, con un Dockerfile multi-stage, `pnpm deploy --prod` (la web, Next.js `standalone`) y usuario no root.
   - Los tópicos se crean explícitamente y la autocreación está desactivada.
 - **AWS:** [`infra/terraform/`](infra/terraform/).
   - VPC con subredes privadas.
