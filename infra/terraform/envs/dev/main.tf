@@ -4,9 +4,10 @@ locals {
   name        = "${local.project}-${local.environment}"
 
   # Servicios HTTP detrás del ALB y su puerto. Cada uno recibe su regla de SG, su target group y su healthcheck.
-  http_ports   = { ingest-gateway = 4001, fleet-api = 4002 }
+  http_ports   = { ingest-gateway = 4001, fleet-api = 4002, agent = 4003 }
   gateway_port = local.http_ports["ingest-gateway"]
   fleet_port   = local.http_ports["fleet-api"]
+  agent_port   = local.http_ports["agent"]
 
   # LIVENESS, no readiness: `/health/live` no consulta la base ni Kafka. Con `/health` (readiness: 503 si falta la base), un corte breve de
   # la base haría fallar el healthcheck del contenedor Y el del target group de TODAS las tareas a la vez: ECS las mataría y el ALB
@@ -27,8 +28,8 @@ locals {
   sse_heartbeat_max_seconds = 30
   alb_idle_timeout_seconds  = 65
 
-  # Imágenes de los servicios que existen hoy. agent y web se agregan aquí y en `services` cuando existan.
-  repositories = ["ingest-gateway", "processor", "fleet-api", "migrate"]
+  # Imágenes de los servicios que existen hoy. La web se agrega aquí y en `services` cuando exista.
+  repositories = ["ingest-gateway", "processor", "fleet-api", "agent", "migrate"]
   images       = { for name in local.repositories : name => "${module.ecr.repository_urls[name]}:${var.image_tag}" }
 }
 
@@ -379,6 +380,22 @@ resource "aws_secretsmanager_secret_version" "session" {
   secret_string_wo_version = var.credentials_version
 }
 
+# API key de Anthropic del agente. NO se genera: la aporta el humano como variable EFÍMERA (TF_VAR_anthropic_api_key) y se escribe con
+# `secret_string_wo`, así que no queda en el estado ni en el plan. Solo se (re)escribe cuando sube `anthropic_api_key_version`; en los
+# demás plan/apply la variable puede quedar sin valor. Secrets Manager (KMS) es su única copia.
+resource "aws_secretsmanager_secret" "anthropic" {
+  name                    = "${local.name}/app/anthropic"
+  description             = "ANTHROPIC_API_KEY del agente (lo escribe el humano; ver el README)."
+  kms_key_id              = module.kms.key_arn
+  recovery_window_in_days = 7
+}
+
+resource "aws_secretsmanager_secret_version" "anthropic" {
+  secret_id                = aws_secretsmanager_secret.anthropic.id
+  secret_string_wo         = var.anthropic_api_key
+  secret_string_wo_version = var.anthropic_api_key_version
+}
+
 # --- Servicios en Fargate, detrás del ALB (solo 443) ----------------------------------------------------------------------
 locals {
   # Nombres propuestos para la autenticación de Kafka en AWS: el backend los define (ADR-004, "Pendiente": TLS y SASL/IAM de MSK).
@@ -462,6 +479,38 @@ module "services" {
       # Después de la regla del gateway (100): el resto de /v1/* (auth, dispositivos, lecturas y stream SSE) es de fleet-api.
       listener_priority = 200
       path_patterns     = ["/v1/*"]
+    }
+
+    # El agente no usa Kafka ni la base: llama a fleet-api con la cookie del usuario y a la API del modelo (443 por NAT). Su tarea tiene rol
+    # propio sin permisos AWS (sin task_policy_json) y su rol de ejecución solo lee SESSION_SECRET y ANTHROPIC_API_KEY.
+    agent = {
+      image         = local.images["agent"]
+      cpu           = 256
+      memory        = 512
+      desired_count = var.agent_desired_count
+      environment = {
+        AGENT_HOST = "0.0.0.0"
+        AGENT_PORT = tostring(local.agent_port)
+        # La red de las tareas no tiene ruta interna hacia fleet-api: la llamada sale por el NAT y entra por el ALB (URL pública).
+        FLEET_API_URL        = var.agent_fleet_api_url
+        AGENT_CORS_ORIGINS   = join(",", var.fleet_api_cors_origins)
+        AGENT_MODEL_PROVIDER = "anthropic"
+        # El ALB es el único proxy delante del agente (el SG de las tareas solo admite tráfico del ALB).
+        AGENT_TRUSTED_PROXY_HOPS = "1"
+        LOG_LEVEL                = "info"
+        NODE_ENV                 = "production"
+        SHUTDOWN_TIMEOUT_MS      = "15000"
+      }
+      secrets = {
+        SESSION_SECRET    = aws_secretsmanager_secret.session.arn
+        ANTHROPIC_API_KEY = aws_secretsmanager_secret.anthropic.arn
+      }
+      container_port       = local.agent_port
+      health_check_path    = local.live_path
+      health_check_command = local.live_command["agent"]
+      # Antes que el /v1/* de fleet-api (200): /v1/chat es del agente. Después del gateway (100), que no se solapa.
+      listener_priority = 150
+      path_patterns     = ["/v1/chat", "/v1/chat/*"]
     }
 
     processor = {
