@@ -490,8 +490,12 @@ export const VEHICLE_LABEL_MAX_LENGTH = 64;
  */
 const PLATE_PATTERN = /^[A-Z0-9]+$/;
 
-/** Etiqueta sin caracteres de control (Cc) ni de dirección bidi (U+202A-202E, U+2066-2069): un NUL rompe el INSERT y los bidi falsean lo que se ve. */
-const LABEL_PATTERN = /^[^\p{Cc}\u202A-\u202E\u2066-\u2069]*$/u;
+/**
+ * Texto visible sin caracteres de control (Cc), de formato (Cf: bidi U+202A-202E y U+2066-2069, ancho cero U+200B-200F, U+061C, U+2060, U+FEFF) ni separadores de
+ * línea o párrafo (Zl, Zp): un NUL rompe el INSERT y los invisibles y bidi falsean lo que se ve o permiten nombres que parecen iguales y no lo son.
+ * Compartido por la etiqueta de un vehículo y el nombre de una zona. Desde v1.
+ */
+const SAFE_TEXT_PATTERN = /^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]*$/u;
 
 /** Vehículo del catálogo del tenant (con o sin datos de telemetría). Desde v1. */
 export const vehicleCatalogItemSchema = z.object({
@@ -523,7 +527,7 @@ export type VehicleListResponse = z.infer<typeof vehicleListResponseSchema>;
 /**
  * Cuerpo de `POST /v1/vehicles` (alta). Desde v1. La placa se NORMALIZA al parsear: se recorta, pasa a mayúsculas y se le quitan los
  * espacios y los guiones; el resultado debe cumplir `^[A-Z0-9]+$`, de 1 a 32 caracteres (`abc-123` y `ABC 123` dan `ABC123`). La
- * etiqueta es opcional: se recorta, admite hasta 64 caracteres sin caracteres de control ni bidi, y una vacía (o ausente, o null) se
+ * etiqueta es opcional: se recorta, admite hasta 64 caracteres sin caracteres de control, de formato ni bidi, y una vacía (o ausente, o null) se
  * guarda como null. Responde `201` con `vehicleCatalogItemSchema`, o `409 plate_taken`.
  */
 export const vehicleCreateRequestSchema = z.object({
@@ -540,7 +544,7 @@ export const vehicleCreateRequestSchema = z.object({
     .string()
     .trim()
     .max(VEHICLE_LABEL_MAX_LENGTH)
-    .regex(LABEL_PATTERN, { error: "la etiqueta no admite caracteres de control ni de dirección de texto" })
+    .regex(SAFE_TEXT_PATTERN, { error: "la etiqueta no admite caracteres de control, de formato ni de dirección de texto" })
     .nullish()
     .transform((value) => (value === undefined || value === null || value === "" ? null : value))
     .describe("DATO PERSONAL (Ley 1581). Nombre visible o alias, opcional; vacío equivale a null. Desde v1."),
@@ -584,6 +588,11 @@ export const ZONE_NAME_TAKEN_ERROR_CODE = "zone_name_taken";
 /** Código de `apiErrorSchema` de `POST /v1/zones` (400) cuando PostGIS considera inválido el polígono (por ejemplo, con auto-intersección). Desde v1. */
 export const INVALID_GEOMETRY_ERROR_CODE = "invalid_geometry";
 
+/** Máximo de zonas de un tenant. El alta responde `409 zone_limit_reached` al alcanzarlo; igual o menor que el tope de lectura de `GET /v1/zones/geojson` (1000), para que ninguna zona quede sin verse. Desde v1. */
+export const ZONE_MAX_PER_TENANT = 1_000;
+/** Código de `apiErrorSchema` de `POST /v1/zones` (409) cuando el tenant ya tiene `ZONE_MAX_PER_TENANT` zonas. Desde v1. */
+export const ZONE_LIMIT_REACHED_ERROR_CODE = "zone_limit_reached";
+
 /** Rectángulo en grados WGS84 (SRID 4326). Los bordes cuentan como dentro. */
 export interface BoundingBox {
   readonly minLon: number;
@@ -593,15 +602,26 @@ export interface BoundingBox {
 }
 
 /**
- * Área de operación: Colombia, incluidos San Andrés y Providencia (regla 13). ES UN RECTÁNGULO, NO UN POLÍGONO: deja pasar puntos de
- * países vecinos que caen dentro del rectángulo y solo descarta lo evidentemente ajeno (otros continentes, un GPS en 0,0 o lat y lon
- * intercambiadas). Mismos límites que el filtro de área del processor (`services/processor/src/domain/operating-area.ts`, que los
- * documenta); mientras el processor mantenga su copia, quien cambie uno debe cambiar el otro.
+ * Área de operación: Colombia, incluidos San Andrés y Providencia (regla 13 de CLAUDE.md).
+ *
+ * ES UN RECTÁNGULO (bbox), NO UN POLÍGONO. Deja pasar puntos que no están en Colombia pero caen dentro del rectángulo:
+ * buena parte de Venezuela, Ecuador, Perú y Brasil, y casi todo Panamá (Ciudad de Panamá incluida: lon -79,5). Solo
+ * descarta lo evidentemente ajeno (otros continentes, un GPS en 0,0, un intercambio de lon y lat, el occidente de Panamá
+ * y Centroamérica). Afinarlo con un polígono (`ST_Covers`) sería un cambio de esta regla, no un arreglo.
+ *
+ * Origen de los límites: los puntos extremos del territorio según el IGAC, redondeados hacia afuera para dar margen:
+ * - occidente: Cabo Manglares (Nariño) lon -79,02 en el continente; en el Caribe, los cayos de Albuquerque (San Andrés)
+ *   lon -81,85, que fija el límite occidental en -82,0;
+ * - oriente: la isla San José en el río Negro (Guainía) lon -66,85, de ahí -66,8;
+ * - norte: Punta Gallinas (La Guajira) lat 12,46 en el continente; Providencia lat 13,35 y el cayo Roncador lat 13,57 en el
+ *   Caribe, de ahí 13,6. Quedan fuera los cayos Serrana, Quitasueño, Serranilla y Bajo Nuevo (lat > 14), deshabitados;
+ * - sur: la quebrada San Antonio en el Amazonas (Leticia) lat -4,23, de ahí -4,3.
+ * Los valores son de referencia y no se pudieron contrastar contra la fuente oficial al escribirlos: quien los cambie debe
+ * citar la fuente y ajustar `operating-area.test.ts` del processor.
+ * FUENTE ÚNICA: el processor (filtro de puntos), el simulador y la validación de zonas (`zoneCreateRequestSchema`) importan esta constante.
  */
 export const COLOMBIA_BBOX: BoundingBox = { minLon: -82.0, maxLon: -66.8, minLat: -4.3, maxLat: 13.6 };
 
-/** Nombre de zona sin caracteres de control (Cc) ni de dirección bidi (U+202A-202E, U+2066-2069): un NUL rompe el INSERT y los bidi falsean lo que se ve. */
-const ZONE_NAME_PATTERN = /^[^\p{Cc}\u202A-\u202E\u2066-\u2069]*$/u;
 
 const ZONE_RING_BBOX_MESSAGE =
   `Todas las coordenadas deben estar dentro de Colombia (longitud de ${COLOMBIA_BBOX.minLon} a ${COLOMBIA_BBOX.maxLon}, latitud de ` +
@@ -624,13 +644,14 @@ const zoneRing = z
   .refine((ring) => new Set(ring.map(([x, y]) => `${x},${y}`)).size >= 3, { error: "El polígono necesita al menos 3 vértices distintos." })
   .refine((ring) => ring.every(([x, y]) => isInsideBoundingBox(x, y, COLOMBIA_BBOX)), { error: ZONE_RING_BBOX_MESSAGE });
 
-function isInsideBoundingBox(lon: number, lat: number, area: BoundingBox): boolean {
+/** `true` si el punto cae dentro del rectángulo (bordes incluidos). Longitud primero, como en `ST_MakePoint(lon, lat)`. */
+export function isInsideBoundingBox(lon: number, lat: number, area: BoundingBox = COLOMBIA_BBOX): boolean {
   return lon >= area.minLon && lon <= area.maxLon && lat >= area.minLat && lat <= area.maxLat;
 }
 
 /**
- * Cuerpo de `POST /v1/zones` (alta). Desde v1. `name` se recorta y va de 1 a `ZONE_NAME_MAX_LENGTH` caracteres, sin caracteres de
- * control ni bidi; `kind` es uno de `ZONE_KINDS`. `geometry` es un `Polygon` GeoJSON con UN solo anillo (sin huecos): lista cerrada
+ * Cuerpo de `POST /v1/zones` (alta). Desde v1. `name` se recorta, se normaliza a Unicode NFC ("Depósito" compuesto y descompuesto es la MISMA zona) y va de 1 a `ZONE_NAME_MAX_LENGTH` caracteres, sin caracteres de
+ * control, de formato ni bidi (mismo patrón que la etiqueta de un vehículo); `kind` es uno de `ZONE_KINDS`. `geometry` es un `Polygon` GeoJSON con UN solo anillo (sin huecos): lista cerrada
  * (primera = última) de `[lng, lat]` (longitud primero), de 4 a `ZONE_MAX_VERTICES + 1` posiciones, con al menos 3 vértices distintos
  * y todas dentro de `COLOMBIA_BBOX`. Que el polígono no se auto-intersecte lo decide PostGIS al guardar (`400 invalid_geometry`).
  * Responde `201` con `zoneFeatureSchema`, `409 zone_name_taken` o `400`.
@@ -639,9 +660,10 @@ export const zoneCreateRequestSchema = z.object({
   name: z
     .string()
     .trim()
+    .normalize("NFC")
     .min(1, { error: "El nombre de la zona no puede estar vacío." })
     .max(ZONE_NAME_MAX_LENGTH, { error: `El nombre admite a lo sumo ${ZONE_NAME_MAX_LENGTH} caracteres.` })
-    .regex(ZONE_NAME_PATTERN, { error: "El nombre no admite caracteres de control ni de dirección de texto." })
+    .regex(SAFE_TEXT_PATTERN, { error: "El nombre no admite caracteres de control, de formato ni de dirección de texto." })
     .describe(`Nombre de la zona, único dentro del tenant; recortado, de 1 a ${ZONE_NAME_MAX_LENGTH} caracteres. Desde v1.`),
   kind: z.enum(ZONE_KINDS).describe("`critical`, `depot` o `customer`. Desde v1."),
   geometry: z
