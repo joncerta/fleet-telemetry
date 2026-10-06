@@ -90,7 +90,7 @@ pnpm turbo run typecheck test --filter=...@fleet/contracts
 - **Kafka**: la key del mensaje (`vehicleId`) y el tópico no cambian como efecto colateral.
 ## 5. Base de datos (solo si cambia lo que se persiste)
  
-- Crea una migración **nueva** en `infra/db/migrations/`. Nunca edites una existente.
+- Crea un par **nuevo** (`NNN_<nombre>.sql` + `.down.sql`) en `infra/db/migrations/`. Nunca edites uno que ya esté en `develop` o se haya aplicado en un entorno compartido.
 - Revisa cuál es el último número usado y toma el siguiente, sin chocar con migraciones de otras ramas abiertas.
 - La migración es reversible. Columna nueva nullable o con default, para que las réplicas viejas sigan insertando durante el despliegue.
 - En hypertables, los índices únicos incluyen la columna de tiempo, y no se usa `CREATE INDEX CONCURRENTLY`.

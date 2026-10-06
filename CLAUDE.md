@@ -42,7 +42,7 @@ Un agente LangChain responde preguntas en lenguaje natural usando herramientas t
    - Cada réplica que alimenta SSE recibe todos los eventos de sus tenants: no comparten consumer group.
 7. **Inválidos y DLQ**:
    - **Gateway**: un lote con envelope roto (JSON inválido o sin la estructura base) → `400`, sin DLQ. Cada punto que no cumple el esquema → va en `rejected` del ACK con su motivo **y** se publica en `telemetry.dlq` con el motivo y el payload original.
-   - **Processor**: un mensaje que falla al procesar tras agotar los reintentos → `telemetry.dlq` con el motivo.
+   - **Processor**: a `telemetry.dlq` solo va lo que falla **por el contenido del mensaje** (esquema, área de operación, antigüedad, error de datos de la fila), con su motivo. Los fallos de infraestructura se reintentan sin confirmar el offset, aunque detengan la partición.
    - Nada inválido detiene una partición ni se descarta sin rastro.
 8. **ACK del lote**:
    - El gateway responde `accepted` y `rejected` por `eventId`.
@@ -83,7 +83,7 @@ Un agente LangChain responde preguntas en lenguaje natural usando herramientas t
 ## Migraciones
 - Cada migración es un **par reversible**: `infra/db/migrations/NNN_<nombre>.sql` (up) y `NNN_<nombre>.down.sql` (down), con el siguiente número libre.
   - El runner rechaza un up sin su down.
-  - Nunca se edita un par ya aplicado: el checksum de los dos archivos lo hace fallar.
+  - Nunca se edita un par que ya está en `develop` o se aplicó en un entorno compartido: el checksum de los dos archivos lo hace fallar. Mientras solo exista en la rama y en tu base local, se corrige revirtiéndolo con `pnpm db:rollback` y volviendo a migrar.
 - El test de integración del runner hace up → down → up de todas las migraciones y compara el esquema contra un baseline (ver ADR-003 para qué cubre). Un down incompleto lo hace fallar, pero las reglas de negocio de la migración siguen necesitando sus propios tests.
 - Se aplican con `pnpm db:migrate`, se revierten con `pnpm db:rollback` (solo en local) y se consultan con `pnpm db:status`. Los scripts de inicio del contenedor solo corren con el volumen vacío: **no** sirven para migraciones nuevas, y `docker compose down -v` está prohibido.
 
