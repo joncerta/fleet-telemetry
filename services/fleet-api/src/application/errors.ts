@@ -39,3 +39,11 @@ export class PairingInconsistencyError extends Error {
     this.name = "PairingInconsistencyError";
   }
 }
+
+/** La réplica se está apagando y no acepta streams nuevos. El cliente reconecta (a otra réplica, si hay). */
+export class ServerDrainingError extends Error {
+  constructor() {
+    super("El servidor se está apagando.");
+    this.name = "ServerDrainingError";
+  }
+}

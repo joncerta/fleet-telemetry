@@ -82,6 +82,11 @@ export interface TestAppOptions {
   secureCookie?: boolean;
   /** Cada cuántos ms late el stream SSE (por defecto 15 s). */
   heartbeatMs?: number;
+  /** Conexiones SSE nuevas por usuario y ventana (por defecto, holgado). */
+  streamRateLimit?: { max: number; timeWindowMs: number };
+  /** Reconexión del cliente SSE (`retry:`), y el aleatorio del jitter. */
+  reconnect?: { baseMs: number; jitterMs: number };
+  random?: () => number;
   /** Qué lee el snapshot del stream (por defecto un vehículo). */
   snapshots?: FleetSnapshotReader;
   /** Límites del caso de uso del stream. */
@@ -149,7 +154,15 @@ export async function makeTestApp(options: TestAppOptions = {}) {
         listAlerts: useCases.listAlerts,
         getZonesGeoJson: useCases.getZonesGeoJson,
       });
-      registerStreamRoute(instance, { cookies, openFleetStream: useCases.openFleetStream, heartbeatMs: options.heartbeatMs ?? 15_000, corsOrigins: [ALLOWED_ORIGIN] });
+      registerStreamRoute(instance, {
+        cookies,
+        openFleetStream: useCases.openFleetStream,
+        heartbeatMs: options.heartbeatMs ?? 15_000,
+        corsOrigins: [ALLOWED_ORIGIN],
+        rateLimit: options.streamRateLimit ?? { max: 1_000, timeWindowMs: 60_000 },
+        reconnect: options.reconnect ?? { baseMs: 3_000, jitterMs: 5_000 },
+        ...(options.random !== undefined && { random: options.random }),
+      });
       registerDeviceRoutes(instance, { cookies, createPairingCode: useCases.createPairingCode, pairDevice: useCases.pairDevice, pairFailureLimiter });
     },
     ...options.app,

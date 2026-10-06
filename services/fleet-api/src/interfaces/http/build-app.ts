@@ -6,6 +6,7 @@ import type { HealthResponse } from "@fleet/contracts";
 import type { Logger } from "@fleet/platform";
 import Fastify, { LogController, type FastifyInstance, type FastifyRequest, type RawServerDefault } from "fastify";
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
+import { ServerDrainingError } from "../../application/errors.js";
 import { CORRELATION_ID_HTTP_HEADER, resolveCorrelationId } from "./correlation.js";
 import { mapError, notFoundError } from "./errors.js";
 import { registerHealthRoute } from "./health-route.js";
@@ -103,7 +104,9 @@ export async function buildApp(deps: AppDependencies): Promise<FleetApiApp> {
   app.setErrorHandler((error, request, reply) => {
     const mapped = mapError(error);
     if (mapped.headers !== undefined) void reply.headers(mapped.headers);
-    if (mapped.statusCode >= 500) {
+    if (error instanceof ServerDrainingError) {
+      request.log.info({ code: mapped.body.error.code }, "Petición rechazada: la réplica se está apagando");
+    } else if (mapped.statusCode >= 500) {
       request.log.error({ err: error }, "Error no controlado en la petición");
     } else {
       request.log.warn({ statusCode: mapped.statusCode, code: mapped.body.error.code }, "Petición rechazada");

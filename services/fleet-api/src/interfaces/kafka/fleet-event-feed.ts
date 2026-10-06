@@ -1,6 +1,9 @@
 import { alertEventTolerantSchema, SSE_EVENTS, vehicleStateEventTolerantSchema } from "@fleet/contracts";
 import { getCorrelationId, type Logger } from "@fleet/platform";
+import { z } from "zod";
 import type { FleetStreamEvent } from "../../domain/stream-ordering.js";
+
+const crashPayload = z.object({ error: z.instanceof(Error), groupId: z.string(), restart: z.boolean() });
 
 /** Evento de instrumentación de kafkajs tal como lo entrega `consumer.on`: el `payload` es `unknown` y cada listener lo estrecha con su esquema. */
 export interface FeedConsumerEvent {
@@ -45,6 +48,11 @@ export interface FleetEventFeedOptions {
   /** A quién se entrega cada evento válido (el hub en memoria del caso de uso). */
   publish: (tenantId: string, event: FleetStreamEvent) => void;
   logger: Pick<Logger, "info" | "warn" | "error" | "debug">;
+  /**
+   * El consumer se cayó y kafkajs NO lo va a reiniciar (`restart: false`): el proceso seguiría vivo, con las conexiones SSE abiertas pero sin
+   * recibir un solo evento. Quien compone (`main.ts`) apaga el proceso con código 1 para que el orquestador lo reinicie, como el processor.
+   */
+  onFatal: (reason: string) => void;
 }
 
 export interface FleetEventFeed {
@@ -64,11 +72,12 @@ export interface FleetEventFeed {
  *   vería; no importa, porque el servidor no acepta streams hasta que `start()` resuelve y cada stream lee su snapshot DESPUÉS (ADR-009).
  * - **Parseo con los esquemas TOLERANTES** del contrato (un enum nuevo llega como `"unknown"`, una `schemaVersion` futura se lee). Un mensaje
  *   inválido se registra (tópico, partición y offset; nunca el contenido: lleva posición y placa) y se descarta: no hay DLQ, no detiene la partición.
+ * - Un `CRASH` sin reinicio (`restart: false`, o un payload ilegible) llama a `onFatal`: el proceso se apaga y el orquestador lo reinicia.
  * - `eachMessage` nunca lanza: lo que falle al repartir no puede hacer que kafkajs reinicie el consumer.
  * - El `tenantId` sale del PAYLOAD validado del evento, no de la key ni de headers.
  */
 export function createFleetEventFeed(options: FleetEventFeedOptions): FleetEventFeed {
-  const { consumer, groupId, topics, publish, logger } = options;
+  const { consumer, groupId, topics, publish, logger, onFatal } = options;
   let ready = false;
   let started = false;
 
@@ -118,7 +127,15 @@ export function createFleetEventFeed(options: FleetEventFeedOptions): FleetEvent
       consumer.on(consumer.events.CRASH, (event) => {
         if (event.type !== "consumer.crash") return;
         ready = false;
-        logger.error({ groupId }, "El consumer del SSE se cayó: /health lo reporta caído hasta que kafkajs lo reinicie");
+        // Falla en cerrado: si el payload no se puede leer no se sabe si kafkajs reiniciará el consumer, y es preferible reiniciar el proceso
+        // a dejarlo vivo y sin entregar eventos.
+        const parsed = crashPayload.safeParse(event.payload);
+        if (parsed.success && parsed.data.restart) {
+          logger.warn({ groupId, err: parsed.data.error }, "El consumer del SSE se cayó y kafkajs lo reinicia: /health lo reporta caído hasta entonces");
+          return;
+        }
+        logger.error({ groupId, ...(parsed.success && { err: parsed.data.error }) }, "El consumer del SSE se cayó y kafkajs NO lo reinicia: se apaga el proceso para que el orquestador lo reinicie");
+        onFatal("el consumer del SSE se cayó sin reinicio");
       });
 
       await consumer.connect();

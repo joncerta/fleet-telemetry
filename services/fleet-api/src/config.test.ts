@@ -18,6 +18,11 @@ describe("loadFleetApiConfig", () => {
       SSE_HEARTBEAT_MS: 15_000,
       SSE_MAX_STREAMS_PER_USER: 5,
       SSE_MAX_PENDING_BYTES: 4_194_304,
+      SSE_RETRY_MS: 3_000,
+      SSE_RETRY_JITTER_MS: 5_000,
+      SSE_RATE_LIMIT_MAX: 30,
+      SSE_RATE_LIMIT_WINDOW_MS: 60_000,
+      SSE_SNAPSHOT_POOL_MAX: 3,
       FLEET_API_TRUSTED_PROXY_HOPS: 0,
       FLEET_API_LOGIN_FAILURE_LIMIT_MAX: 10,
       FLEET_API_PAIR_FAILURE_LIMIT_MAX: 10,
@@ -113,6 +118,12 @@ describe("loadFleetApiConfig", () => {
     ["SSE_MAX_STREAMS_PER_USER", "101"],
     ["SSE_MAX_PENDING_BYTES", "65535"],
     ["SSE_MAX_PENDING_BYTES", "67108865"],
+    ["SSE_RETRY_MS", "999"],
+    ["SSE_RETRY_JITTER_MS", "-1"],
+    ["SSE_RATE_LIMIT_MAX", "0"],
+    ["SSE_RATE_LIMIT_WINDOW_MS", "999"],
+    ["SSE_SNAPSHOT_POOL_MAX", "0"],
+    ["SSE_SNAPSHOT_POOL_MAX", "21"],
   ])("rechaza %s=%s nombrando la variable", (name, value) => {
     expect(() => loadFleetApiConfig({ ...valid, [name]: value })).toThrow(new RegExp(name));
   });

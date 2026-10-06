@@ -45,6 +45,9 @@ const logger = createLogger({ service: SERVICE, level: config.LOG_LEVEL });
 // ni quitarle conexiones.
 const pool = createPool({ connectionString: config.DATABASE_URL, applicationName: SERVICE, logger });
 const healthPool = createPool({ connectionString: config.DATABASE_URL, applicationName: `${SERVICE}-health`, logger, max: 1 });
+// Pool PROPIO (pequeño) para los snapshots del SSE: tras un reinicio todos los clientes reconectan a la vez y cada uno lee un snapshot; con el pool
+// de la API, esa avalancha dejaría sin conexiones al REST. Aquí la cola de snapshots espera en su propio pool.
+const snapshotPool = createPool({ connectionString: config.DATABASE_URL, applicationName: `${SERVICE}-sse-snapshot`, logger, max: config.SSE_SNAPSHOT_POOL_MAX });
 
 const sessionCookies = createSessionCookies({
   codec: createSessionCodec(config.SESSION_SECRET),
@@ -66,10 +69,14 @@ const eventFeed = createFleetEventFeed({
   topics: { vehicleState: TOPICS.vehicleState, fleetAlerts: TOPICS.fleetAlerts },
   publish: eventHub.publish,
   logger,
+  // Un consumer caído sin reinicio deja el proceso vivo y sin entregar eventos: se apaga con código 1 para que el orquestador lo reinicie.
+  onFatal: (reason) => {
+    void lifecycle.shutdown(reason, 1);
+  },
 });
 const fleetStreams = createOpenFleetStream({
   subscriptions: eventHub,
-  snapshots: createPgFleetSnapshotReader(pool),
+  snapshots: createPgFleetSnapshotReader(snapshotPool),
   clock,
   logger,
   limits: { maxStreamsPerUser: config.SSE_MAX_STREAMS_PER_USER, maxPendingBytes: config.SSE_MAX_PENDING_BYTES, maxBufferedEvents: MAX_BUFFERED_EVENTS },
@@ -109,6 +116,8 @@ const app = await buildApp({
       openFleetStream: fleetStreams.open,
       heartbeatMs: config.SSE_HEARTBEAT_MS,
       corsOrigins: config.FLEET_API_CORS_ORIGINS,
+      rateLimit: { max: config.SSE_RATE_LIMIT_MAX, timeWindowMs: config.SSE_RATE_LIMIT_WINDOW_MS },
+      reconnect: { baseMs: config.SSE_RETRY_MS, jitterMs: config.SSE_RETRY_JITTER_MS },
     });
     registerDeviceRoutes(instance, {
       cookies: sessionCookies,
@@ -132,7 +141,7 @@ const lifecycle = installGracefulShutdown({
   logger,
   timeoutMs: config.SHUTDOWN_TIMEOUT_MS,
   steps: [
-    // 1) Corta los streams SSE abiertos y detiene el consumer de Kafka que los alimenta: ANTES de cerrar el servidor, que no espera a una
+    // 1) Corta los streams SSE abiertos, pasa a draining (los streams nuevos reciben 503 con Retry-After) y detiene el consumer de Kafka que los alimenta: ANTES de cerrar el servidor, que no espera a una
     //    conexión SSE (nunca termina sola) y se quedaría colgado hasta el tope del apagado.
     { name: "cerrar los streams SSE", run: () => Promise.resolve(fleetStreams.closeAll()) },
     { name: "detener y desconectar el consumer del SSE", run: () => eventFeed.stop() },
@@ -140,6 +149,7 @@ const lifecycle = installGracefulShutdown({
     { name: "cerrar el servidor HTTP", run: () => app.close() },
     // 3) Con nada en vuelo, ya se pueden cerrar los pools.
     { name: "cerrar el pool de Postgres", run: () => pool.end() },
+    { name: "cerrar el pool de snapshots del SSE", run: () => snapshotPool.end() },
     { name: "cerrar el pool del ping de salud", run: () => healthPool.end() },
   ],
 });

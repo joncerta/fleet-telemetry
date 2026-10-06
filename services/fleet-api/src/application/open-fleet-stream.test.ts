@@ -421,6 +421,47 @@ describe("limpieza al cerrar", () => {
   });
 });
 
+describe("draining (apagado)", () => {
+  it("tras closeAll los streams nuevos se rechazan como draining SIN leer el snapshot, suscribirse ni gastar cupo", async () => {
+    const read = vi.fn<FleetSnapshotReader["read"]>(() => Promise.resolve({ vehicles: [], alerts: [] }));
+    const { stream, subscribe } = makeUseCase({ reader: { read } });
+    stream.closeAll();
+    const attach = vi.fn(() => makeSink().sink);
+
+    const result = await stream.open(context(identityOf()), attach);
+
+    expect(result).toEqual({ status: "draining" });
+    expect(read).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("un stream que se está abriendo cuando llega closeAll no se entrega: se deshace y responde draining", async () => {
+    const gated = makeGatedReader({ vehicles: [], alerts: [] });
+    const { stream } = makeUseCase({ reader: gated.reader, limits: { maxStreamsPerUser: 1 } });
+    const identity = identityOf();
+    const attach = vi.fn(() => makeSink().sink);
+    const opening = stream.open(context(identity), attach);
+    await vi.waitFor(() => expect(gated.read).toHaveBeenCalled());
+
+    stream.closeAll();
+    gated.release();
+
+    expect(await opening).toEqual({ status: "draining" });
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it("los streams abiertos antes de closeAll se cortan como siempre", async () => {
+    const { stream } = makeUseCase();
+    const sink = makeSink();
+    await stream.open(context(identityOf()), () => sink.sink);
+
+    stream.closeAll();
+
+    expect(sink.state.ended).toBe(true);
+  });
+});
+
 describe("logs", () => {
   it("registran aperturas y cierres con conteos por tenant y el correlationId, y nunca placas ni posiciones", async () => {
     const identity = identityOf();

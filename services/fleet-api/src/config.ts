@@ -41,6 +41,15 @@ const fleetApiConfig = z.object({
   FLEET_API_COOKIE_SECURE: booleanFlag.default(false),
   // Latido del stream SSE: acotado por el idle timeout del ALB.
   SSE_HEARTBEAT_MS: z.coerce.number().int().min(1_000).max(MAX_SSE_HEARTBEAT_MS).default(15_000),
+  // Reconexión del cliente SSE (`retry:` del primer frame): base en ms más un jitter aleatorio de 0 a SSE_RETRY_JITTER_MS, para que un reinicio no
+  // provoque una estampida de reconexiones.
+  SSE_RETRY_MS: z.coerce.number().int().min(1_000).max(120_000).default(3_000),
+  SSE_RETRY_JITTER_MS: z.coerce.number().int().min(0).max(120_000).default(5_000),
+  // Conexiones SSE NUEVAS por usuario y ventana (cada una lee un snapshot de la base). Superado: 429 con Retry-After.
+  SSE_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(10_000).default(30),
+  SSE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(60_000),
+  // Conexiones del pool PROPIO que lee los snapshots del SSE (no compite con el pool de la API REST).
+  SSE_SNAPSHOT_POOL_MAX: z.coerce.number().int().min(1).max(20).default(3),
   // Identidad de ESTA réplica en el consumer group del SSE (`fleet-api-sse-<id>`): cada réplica necesita un grupo propio para recibir todos los
   // eventos. Por defecto un uuid nuevo por proceso (el grupo no sobrevive al proceso). Solo `[A-Za-z0-9._-]`, hasta 64 caracteres.
   FLEET_API_INSTANCE_ID: z
