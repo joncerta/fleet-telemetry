@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { contracts, createKafkaClient, LOAD_TENANT_ID, platform, requireEnv, RUN_DIR, sleep } from "./common.mjs";
+import { buildChecks } from "../lib/checks.js";
 import { hash32 } from "../lib/prng.js";
 
 const RAW_TOPIC = "telemetry.raw";
@@ -106,8 +107,9 @@ function distinct(items) {
 }
 
 /**
- * Compara conteos. Devuelve `{ ok, checks, report }`. `chaos` relaja una sola cosa y lo declara: con una interrupción, la DLQ puede repetir
- * mensajes (at-least-once, ADR-005.3) y se exige igualdad por eventId distinto en vez de por mensaje.
+ * Compara conteos (ver lib/checks.js). Devuelve `{ ok, checks, report }`. `chaos` (`{ action, ... }`) relaja UNA sola cosa y solo con una
+ * interrupción abrupta (`processor-kill`, SIGKILL): la DLQ puede repetir mensajes (at-least-once, ADR-005.3) y se exige igualdad por
+ * eventId distinto. Sin interrupción, o con una ordenada (restart, stop), se exige `dlqRepeats === 0`.
  */
 export async function verifyRun({ runId, t0Ms, k6, chaos, lagTimeoutMs = 120_000, maxDrainSeconds = 90 }) {
   const groupId = process.env.PROCESSOR_CONSUMER_GROUP || "processor";
@@ -147,26 +149,19 @@ export async function verifyRun({ runId, t0Ms, k6, chaos, lagTimeoutMs = 120_000
     const dlqDistinct = distinct(ofRun.map((m) => m.eventId));
     const dlqRepeats = ofRun.length - dlqDistinct;
 
-    const checks = [];
-    const add = (name, expected, observed, extra = {}) => checks.push({ name, expected, observed, ok: expected === observed, ...extra });
-    add("persistidos = válidos únicos enviados (cero pérdidas)", c.sent_valid_unique, persistedRows);
-    add("filas persistidas = eventId distintos (cero duplicados)", persistedRows, persistedDistinct);
-    add("rejected en los ACK = fuera de esquema enviados", c.sent_edge_invalid, c.ack_rejected);
-    add("DLQ invalid_schema (eventId distintos) = fuera de esquema enviados", c.sent_edge_invalid, distinct(schemaMessages.map((m) => m.eventId)));
-    add("DLQ outside_operating_area (eventId distintos) = fuera de Colombia enviados", c.sent_outside_area, distinct(outsideMessages.map((m) => m.eventId)));
-    add("DLQ (eventId distintos) = fuera de esquema + fuera de Colombia", c.sent_edge_invalid + c.sent_outside_area, dlqDistinct);
-    add("DLQ sin otros códigos de fallo", 0, otherCodes);
-    add("respuestas 400 = lotes con envelope roto", c.sent_broken_envelope, c.response_400);
-    add("ningún mensaje del tenant en la DLQ sin atribuir a la corrida (los envelopes rotos no llegan a la DLQ)", 0, unattributed);
-    add("mensajes ilegibles en la DLQ", 0, dlq.unparseable.length);
-    add("errores inesperados en k6", 0, c.unexpected_errors);
-    add("thresholds de k6 fallidos", 0, k6.thresholdsFailed.length);
-    if (chaos) {
-      checks.push({ name: `lag a cero en ${maxDrainSeconds} s o menos tras terminar la carga`, expected: `<= ${maxDrainSeconds}`, observed: drainSeconds, ok: drainSeconds <= maxDrainSeconds });
-      // Sin caos, la DLQ no debe repetir mensajes; con caos se admite y se informa (ADR-005.3).
-    } else {
-      add("DLQ sin mensajes repetidos (sin interrupciones)", 0, dlqRepeats);
-    }
+    const observed = {
+      persistedRows,
+      persistedDistinct,
+      dlqSchemaDistinct: distinct(schemaMessages.map((m) => m.eventId)),
+      dlqOutsideDistinct: distinct(outsideMessages.map((m) => m.eventId)),
+      dlqDistinct,
+      dlqOtherCodes: otherCodes,
+      dlqUnattributed: unattributed,
+      dlqUnparseable: dlq.unparseable.length,
+      thresholdsFailed: k6.thresholdsFailed.length,
+      dlqRepeats,
+    };
+    const checks = buildChecks({ counters: c, observed, chaos, drainSeconds, maxDrainSeconds });
 
     const report = {
       runId,
@@ -183,7 +178,17 @@ export async function verifyRun({ runId, t0Ms, k6, chaos, lagTimeoutMs = 120_000
         outsideArea: c.sent_outside_area,
         brokenEnvelope: c.sent_broken_envelope,
       },
-      observed: { persistedRows, persistedDistinct, ackRejected: c.ack_rejected, response400: c.response_400, dlqMessages: ofRun.length, dlqDistinct, dlqRepeats, dlqUnattributed: unattributed },
+      observed: {
+        persistedRows,
+        persistedDistinct,
+        ackAccepted: c.ack_accepted,
+        ackRejected: c.ack_rejected,
+        response400: c.response_400,
+        dlqMessages: ofRun.length,
+        dlqDistinct,
+        dlqRepeats,
+        dlqUnattributed: unattributed,
+      },
       chaos: chaos ?? null,
       checks,
     };
