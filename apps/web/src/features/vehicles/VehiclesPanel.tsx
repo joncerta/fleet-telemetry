@@ -86,7 +86,7 @@ export function VehiclesPanel() {
   const neverReported = total === null ? 0 : Math.max(0, total - rows.length);
 
   return (
-    <Panel id="vehicles-heading" title="Vehículos" aside={ready && <span className="text-xs text-ink-muted">{rows.length} con datos</span>}>
+    <Panel id="vehicles" title="Vehículos" defaultOpen={false} count={ready ? rows.length : undefined}>
       {ready ? <VehicleList rows={rows} selectedId={selectedId} onSelect={select} /> : <PanelNote>Esperando datos en vivo…</PanelNote>}
       {ready && neverReported > 0 && <p className="mt-2 text-xs text-ink-muted">{neverReported} vehículos aún no han reportado.</p>}
     </Panel>

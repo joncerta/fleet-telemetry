@@ -105,3 +105,13 @@ export const connectionStatus = (page: Page) => page.getByRole("status").filter(
 export const vehicleList = (page: Page) => page.getByRole("list", { name: "Vehículos" });
 export const vehicleItem = (page: Page, plate: string) => vehicleList(page).getByRole("listitem").filter({ hasText: plate });
 export const alertList = (page: Page) => page.getByRole("list", { name: "Alertas" });
+
+/** Encabezado clicable de un panel desplegable de la columna lateral (su nombre empieza por el titulo; despues viene el contador). */
+export const panelToggle = (page: Page, title: string) => page.getByRole("button", { name: new RegExp(`^${title}`) });
+
+/** Abre un panel si esta cerrado (por defecto o por una preferencia guardada) y espera a que quede abierto. */
+export async function openPanel(page: Page, title: string): Promise<void> {
+  const toggle = panelToggle(page, title);
+  if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+}

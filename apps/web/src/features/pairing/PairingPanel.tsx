@@ -87,7 +87,7 @@ export function PairingPanel() {
   };
 
   return (
-    <Panel id="pairing-heading" title="Vincular dispositivo">
+    <Panel id="pairing" title="Vincular dispositivo" defaultOpen={false} keepMounted>
       {!ready ? (
         <PanelNote>Esperando datos en vivo…</PanelNote>
       ) : (

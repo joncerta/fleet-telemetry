@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { alert, VEHICLE_A, VEHICLE_B } from "../../test-support/fixtures";
-import { announceNewAlerts, buildAlertFeed, severityOf } from "./alert-feed";
+import { announceNewAlerts, buildAlertFeed, countActiveAlerts, partitionAlertFeed, severityOf } from "./alert-feed";
 
 const at = (minute: number, second = 0) => `2026-10-06T15:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}.000Z`;
 
@@ -61,5 +61,32 @@ describe("announceNewAlerts", () => {
   it("sin nada nuevo no anuncia nada", () => {
     const known = alert();
     expect(announceNewAlerts(new Set([known.alertId]), [known])).toEqual({ polite: null, assertive: null });
+  });
+});
+
+describe("partitionAlertFeed y countActiveAlerts", () => {
+  const resolved = (minute: number, vehicleId = VEHICLE_A) => alert({ vehicleId, raisedAt: at(minute), resolvedAt: at(minute, 30) });
+
+  it("separa activas e historial sin perder ni duplicar grupos; el historial va de mas reciente a mas antiguo", () => {
+    const groups = buildAlertFeed([resolved(0), alert({ vehicleId: VEHICLE_B, raisedAt: at(10) }), resolved(20, VEHICLE_B), resolved(5)]);
+    const { active, history } = partitionAlertFeed(groups);
+    expect(active.map((group) => group.vehicleId)).toEqual([VEHICLE_B]);
+    expect(history.every((group) => !group.active)).toBe(true);
+    expect(history.map((group) => group.latest.raisedAt)).toEqual([at(20), at(5), at(0)]);
+    expect(active.length + history.length).toBe(groups.length);
+  });
+
+  it("un grupo con alguna alerta activa cuenta como activo", () => {
+    const groups = buildAlertFeed([resolved(0), alert({ raisedAt: at(0, 20) })]);
+    expect(partitionAlertFeed(groups)).toMatchObject({ active: [{ count: 2 }], history: [] });
+  });
+
+  it("sin alertas: ambas listas vacias", () => {
+    expect(partitionAlertFeed([])).toEqual({ active: [], history: [] });
+  });
+
+  it("cuenta las alertas activas (no los grupos)", () => {
+    expect(countActiveAlerts([alert(), alert({ raisedAt: at(0, 5) }), resolved(1)])).toBe(2);
+    expect(countActiveAlerts([])).toBe(0);
   });
 });

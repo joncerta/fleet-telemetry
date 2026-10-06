@@ -2,10 +2,10 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useFleet, useServices } from "../../app-services/services-context";
-import { Panel, PanelNote } from "../../components/panel";
+import { Disclosure, Panel, PanelNote } from "../../components/panel";
 import { formatTime } from "../../lib/format";
 import { createAlertAnnouncer } from "./alert-announcer";
-import { ALERT_TYPE_LABELS, buildAlertFeed, type AlertGroup, type AlertSeverity, type Announcement } from "./alert-feed";
+import { ALERT_TYPE_LABELS, buildAlertFeed, countActiveAlerts, partitionAlertFeed, type AlertGroup, type AlertSeverity, type Announcement } from "./alert-feed";
 
 /** Grupos visibles; el resto queda resumido en "y N más". */
 const VISIBLE_GROUPS = 30;
@@ -47,18 +47,33 @@ const AlertRow = memo(function AlertRow({ group, onSelect }: { group: AlertGroup
   );
 });
 
-/** Presentación de la lista de alertas (sin store). */
-export function AlertList({ groups, onSelect }: { groups: readonly AlertGroup[]; onSelect: (vehicleId: string) => void }) {
-  if (groups.length === 0) return <PanelNote>Sin alertas.</PanelNote>;
+/** Lista de grupos con tope visible; el resto queda resumido en "y N más". */
+function GroupList({ label, groups, onSelect }: { label: string; groups: readonly AlertGroup[]; onSelect: (vehicleId: string) => void }) {
   const hidden = groups.length - VISIBLE_GROUPS;
   return (
     <>
-      <ul aria-label="Alertas" className="space-y-2">
+      <ul aria-label={label} className="space-y-2">
         {groups.slice(0, VISIBLE_GROUPS).map((group) => (
           <AlertRow key={group.key} group={group} onSelect={onSelect} />
         ))}
       </ul>
       {hidden > 0 && <p className="mt-2 text-ink-muted">y {hidden} más.</p>}
+    </>
+  );
+}
+
+/** Presentación (sin store): primero las activas; las resueltas, en un sub-desplegable "Historial" cerrado. */
+export function AlertList({ groups, onSelect }: { groups: readonly AlertGroup[]; onSelect: (vehicleId: string) => void }) {
+  if (groups.length === 0) return <PanelNote>Sin alertas.</PanelNote>;
+  const { active, history } = partitionAlertFeed(groups);
+  return (
+    <>
+      {active.length > 0 ? <GroupList label="Alertas" groups={active} onSelect={onSelect} /> : <PanelNote>Sin alertas activas.</PanelNote>}
+      {history.length > 0 && (
+        <Disclosure title="Historial" count={history.length}>
+          <GroupList label="Historial resuelto" groups={history} onSelect={onSelect} />
+        </Disclosure>
+      )}
     </>
   );
 }
@@ -85,18 +100,27 @@ export function AlertsPanel() {
   const alerts = useFleet((state) => state.alerts);
   const ready = useFleet((state) => state.ready);
   const groups = useMemo(() => buildAlertFeed(Object.values(alerts)), [alerts]);
-  const activeCount = useMemo(() => Object.values(alerts).filter((alert) => alert.resolvedAt === null).length, [alerts]);
+  const activeCount = useMemo(() => countActiveAlerts(Object.values(alerts)), [alerts]);
   const announcement = useAlertAnnouncements();
   const select = useCallback((vehicleId: string) => fleetStore.getState().selectVehicle(vehicleId), [fleetStore]);
 
   return (
-    <Panel id="alerts-heading" title="Alertas en vivo" aside={ready && <span className="text-xs text-ink-muted">{activeCount} activas</span>}>
-      <div aria-live="polite" className="sr-only">
-        {announcement.polite}
-      </div>
-      <div aria-live="assertive" className="sr-only">
-        {announcement.assertive}
-      </div>
+    <Panel
+      id="alerts"
+      title="Alertas en vivo"
+      defaultOpen
+      count={ready ? `${activeCount} activas` : undefined}
+      persistent={
+        <>
+          <div aria-live="polite" className="sr-only">
+            {announcement.polite}
+          </div>
+          <div aria-live="assertive" className="sr-only">
+            {announcement.assertive}
+          </div>
+        </>
+      }
+    >
       {ready ? <AlertList groups={groups} onSelect={select} /> : <PanelNote>Esperando datos en vivo…</PanelNote>}
     </Panel>
   );

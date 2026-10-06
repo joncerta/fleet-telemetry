@@ -115,3 +115,25 @@ export function announceNewAlerts(seen: ReadonlySet<string>, alerts: Iterable<Al
   };
   return { assertive: describe(critical, "Alerta crítica"), polite: describe(other, "Nueva alerta") };
 }
+
+export interface AlertSections {
+  /** Con alguna alerta activa: conservan el orden de `buildAlertFeed` (severidad y recencia). */
+  readonly active: AlertGroup[];
+  /** Todas resueltas, la más reciente primero. */
+  readonly history: AlertGroup[];
+}
+
+/** Separa el feed en activas e historial (resueltas). No pierde ni duplica ningún grupo. */
+export function partitionAlertFeed(groups: readonly AlertGroup[]): AlertSections {
+  return {
+    active: groups.filter((group) => group.active),
+    history: groups.filter((group) => !group.active).sort((a, b) => raisedMs(b.latest) - raisedMs(a.latest)),
+  };
+}
+
+/** Alertas activas (sin `resolvedAt`): el contador del encabezado, igual al de los anuncios. */
+export function countActiveAlerts(alerts: Iterable<AlertTolerant>): number {
+  let count = 0;
+  for (const alert of alerts) if (alert.resolvedAt === null) count += 1;
+  return count;
+}
