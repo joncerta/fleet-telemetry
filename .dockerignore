@@ -1,0 +1,26 @@
+# Contexto de build de Docker: solo lo necesario para `pnpm install --frozen-lockfile` y compilar.
+# Nunca entran secretos (.env), dependencias del host ni artefactos de otros builds.
+.git
+.github
+.claude
+.turbo
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/coverage
+
+# Secretos y datos locales
+.env
+.env.*
+!.env.example
+infra/k6/.run
+infra/terraform
+**/*.tfstate*
+**/*.tfvars
+**/.terraform
+
+# No forman parte de las imágenes de servicio
+docs
+tests/e2e/.logs
+apps/**/.next
+apps/**/.expo

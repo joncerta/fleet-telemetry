@@ -7,7 +7,13 @@ Estas reglas complementan el `CLAUDE.md` de la raíz. El agente que trabaja aqu�
 - Sin secretos en archivos (ni ejemplos ni `*.tfvars` commiteados). No tocar `services/*`, `apps/*/src` ni `packages/*`: lo que la app necesite se reporta a `backend-engineer`.
 
 ## Docker Compose
-- `docker-compose.yml` en la raíz, `name: fleet-telemetry`. **Sin perfil** levanta solo la infraestructura (`timescaledb`, `redpanda`, `redpanda-init`); `--profile app` levanta además servicios y web (fase 4).
+- `docker-compose.yml` en la raíz, `name: fleet-telemetry`. **Sin perfil** levanta solo la infraestructura (`timescaledb`, `redpanda`, `redpanda-init`); `--profile app` levanta además `migrate`, `ingest-gateway` y `processor`. **`fleet-api`, `agent` y la web todavía no existen**: se agregan al perfil `app` (con su Dockerfile en `infra/docker/`) cuando existan.
+- **Perfil `app`:**
+  - Imágenes de `infra/docker/service.Dockerfile` (multi-stage, parametrizado por `SERVICE`; Node 24, `pnpm deploy --prod`, usuario `node`, sin secretos; `.dockerignore` en la raíz). Tag `fleet-telemetry/<servicio>:local`.
+  - `migrate` es un servicio de un solo uso con el patrón de `redpanda-init`: corre `db:migrate`, queda inactivo y `healthy` (`up --wait` falla si un contenedor sale). Si la migración falla, sale con error y `up` falla. `ingest-gateway` y `processor` dependen de él y de `redpanda-init`.
+  - Los hosts internos (`timescaledb:5432`, `redpanda:9092`) se sobrescriben en el compose; el resto de variables sale de `.env`. `ingest-gateway` publica `127.0.0.1:4001` (`INGEST_GATEWAY_HOST=0.0.0.0` dentro del contenedor) y tiene healthcheck contra `/health`. El `processor` no expone HTTP y por ahora no tiene healthcheck (pendiente para `backend-engineer`).
+  - **Primera vez en un Redpanda compartido:** el processor consume `fromBeginning` y reprocesaría el backlog de otras pruebas; antes de levantar el perfil, fija su grupo con `node --env-file-if-exists=.env infra/k6/scripts/anchor-group.mjs`.
+  - Puerto 4001: si `pnpm dev` ya usa el gateway en el host, el contenedor no podrá publicarlo.
 - **Prohibido `docker compose down -v`** (regla de la raíz). Imágenes con tag fijo, nunca `latest`.
 - `redpanda-init` crea los tópicos, desactiva `auto_create_topics_enabled` (propiedad de cluster, vía `rpk cluster config set`) y queda inactivo y `healthy`: en compose v5.3 `up --wait` falla si un contenedor sale durante la espera.
 - Los puertos se publican solo en `127.0.0.1`: Postgres `5432`, Redpanda externo `19092`. Dentro de la red de compose, Redpanda es `redpanda:9092`.
@@ -34,10 +40,13 @@ Key de todos: `vehicleId`. Creación explícita (sin autocreación): servicio `r
 ## AWS
 - **TimescaleDB:** autogestionado en EC2 (decisión aprobada 7 del plan), porque RDS no trae la extensión. Alternativa: Timescale Cloud, que quita la operación de la base pero añade un proveedor, su costo y peering de red.
 - **Kafka:** MSK Serverless con autenticación IAM y TLS; tópicos creados con Terraform, con particiones y retención explícitas.
-- Servicios y datos en subredes privadas; solo el ALB es público (443). El idle timeout del ALB debe superar el intervalo de heartbeat del SSE.
+- Servicios y datos en subredes privadas; solo el ALB es público (443). El idle timeout del ALB debe superar el intervalo de heartbeat del SSE: **120 s en el ALB, y el backend debe enviar el heartbeat cada 30 s o menos** (requisito para `fleet-api`).
+- Código en `infra/terraform/` (ver su README): `bootstrap/` (estado remoto), `envs/dev` (plataforma), `envs/dev-topics` (tópicos, desde dentro de la VPC) y `modules/`. Región, dominio/certificado y presupuesto son decisiones pendientes: variables sin valor por defecto. MSK Serverless domina el costo (~US$560 de ~US$690 al mes); ver el README.
+- Validación local: `terraform fmt -check -recursive`, `init -backend=false` y `validate` por raíz, `tflint` y `trivy config`. Nada de `apply`.
 
 ## k6 (carga y caos)
 - Modelo **abierto** (`ramping-arrival-rate` / `constant-arrival-rate`), con semilla y `vehicleId` fijos. Aborta si el objetivo es un dominio de producción.
 - Mezcla: **10% de duplicados reales** (mismo `eventId` y payload) y **5% de inválidos** según la regla 7 (fuera de esquema, de procesamiento y envelope roto).
 - Verificación por **conteos con SQL de solo lectura** (`fleet_ro`) y lectura de `telemetry.dlq`, tras esperar lag cero. **Sin endpoint público de conteo** (decisión aprobada 6).
 - El caos se ejecuta con `docker compose` desde un script aparte, nunca desde k6; el criterio es que la verificación se cumpla igual tras la recuperación.
+- Código y resultados en `infra/k6/` (ver su README): `run.mjs` lanza k6, el caos opcional (`processor-restart`) y `verify.mjs`. Los tokens de los dispositivos de carga van a `infra/k6/.run/` (ignorado por git); la base solo guarda su sha256. Inválido de procesamiento = punto fuera de Colombia (`outside_operating_area`); no se simulan otros.

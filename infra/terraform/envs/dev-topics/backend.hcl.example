@@ -1,0 +1,9 @@
+# Copia a backend.hcl (no se commitea):  terraform init -backend-config=backend.hcl
+# Sin credenciales. Mismo bucket que envs/dev, clave distinta.
+
+bucket       = "<bucket-de-estado>"
+key          = "fleet-telemetry/dev/topics.tfstate"
+region       = "<region del bucket>"
+encrypt      = true
+kms_key_id   = "<arn de la clave KMS del bucket de estado>"
+use_lockfile = true

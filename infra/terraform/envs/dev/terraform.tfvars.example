@@ -1,0 +1,19 @@
+# Copia a terraform.tfvars (ignorado por git). Todos los valores son marcadores: ninguno es un secreto.
+# Cada uno marcado "DECISION" depende de una respuesta pendiente del equipo; el plan falla hasta que se definan.
+
+aws_region = "<DECISION: region con MSK Serverless>"
+owner      = "<equipo o persona dueña del ambiente>"
+# Centro de costos para la etiqueta cost-center.
+cost_center = "<centro de costos>"
+
+# Tag inmutable de las imágenes (SHA del commit que publicó el pipeline).
+image_tag = "<sha-del-commit>"
+
+# DECISION: ARN del certificado ACM del dominio del ALB (misma región).
+certificate_arn = "arn:aws:acm:<region>:<cuenta>:certificate/<id>"
+
+# DECISION: presupuesto mensual del ambiente, en USD, y quién recibe las alertas.
+monthly_budget_usd = 0
+budget_emails      = ["<correo>"]
+
+alarm_emails = []
