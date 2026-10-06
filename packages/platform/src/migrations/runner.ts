@@ -20,6 +20,7 @@ import { assertLocalDatabaseHost, assertLocalEnvironmentMark, ENVIRONMENT_SETTIN
 import { assertRollbackTarget, DEFAULT_ROLLBACK_TARGET, type RollbackTarget } from "./rollback-target.js";
 import { setRolePasswords, type RolePasswords } from "./roles.js";
 import { timeoutHint } from "./sql-errors.js";
+import { splitSqlStatements } from "./sql-statements.js";
 
 /** Carpeta de migraciones del repositorio (`infra/db/migrations`), resuelta desde este archivo. */
 export const defaultMigrationsDir = fileURLToPath(new URL("../../../../infra/db/migrations", import.meta.url));
@@ -86,9 +87,11 @@ export interface MigrationStatus {
  *   se aplicaron antes de que existiera la columna;
  * - es idempotente: sin pendientes no hace cambios (salvo reasignar las contraseñas de los roles, si se piden).
  *
- * Limitación: cada migración corre dentro de una transacción, así que no admite sentencias que Postgres o
- * TimescaleDB prohíben en una (`CREATE INDEX CONCURRENTLY`, `CREATE MATERIALIZED VIEW ... WITH DATA` de un
- * continuous aggregate). Se resuelven con `WITH NO DATA` y una política de refresco.
+ * Por defecto cada migración corre dentro de una transacción (y se registra en ella). Las que necesitan sentencias que
+ * Postgres o TimescaleDB prohíben dentro de una (`CREATE INDEX CONCURRENTLY`, un continuous aggregate `WITH DATA`,
+ * `refresh_continuous_aggregate`) llevan `-- migrate:no-transaction` en la primera línea del up y del down: el runner
+ * ejecuta cada sentencia por separado, sin transacción, y las registra DESPUÉS del éxito. Deben ser idempotentes sentencia
+ * por sentencia (ver `NO_TRANSACTION_MARKER`). Siguen bajo el mismo advisory lock.
  */
 export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
   const { adminUrl, migrationsDir, rolePasswords, logger } = options;
@@ -274,6 +277,7 @@ async function verifyAndBackfill(
 }
 
 async function applyOne(client: Client, file: MigrationFile, timeouts: SessionTimeouts): Promise<void> {
+  if (!file.transactional) return applyWithoutTransaction(client, file, timeouts);
   await client.query("BEGIN");
   try {
     await client.query(file.sql);
@@ -292,7 +296,49 @@ async function applyOne(client: Client, file: MigrationFile, timeouts: SessionTi
   }
 }
 
+/**
+ * Up sin transacción: una sentencia por `query`, y la fila de `schema_migrations` solo tras el éxito de todas. Si una falla,
+ * las anteriores quedan hechas y la migración no queda registrada: el siguiente `db:migrate` la ejecuta entera otra vez, por
+ * eso debe ser idempotente sentencia por sentencia.
+ */
+async function applyWithoutTransaction(client: Client, file: MigrationFile, timeouts: SessionTimeouts): Promise<void> {
+  try {
+    for (const statement of splitSqlStatements(file.sql)) await client.query(statement);
+    await client.query("INSERT INTO schema_migrations (version, name, checksum, down_checksum) VALUES ($1, $2, $3, $4)", [
+      file.version,
+      file.name,
+      file.checksum,
+      file.downChecksum,
+    ]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "error desconocido";
+    const hint = timeoutHint(error, timeouts);
+    throw new MigrationError(
+      `La migración ${file.fileName} (sin transacción) falló y NO se revirtió: puede haber quedado aplicada en parte y no está registrada. ` +
+        `Corrige la causa y vuelve a correr db:migrate: se ejecuta desde la primera sentencia, y debe ser idempotente. ${detail}${hint ? ` ${hint}` : ""}`,
+      { cause: error },
+    );
+  }
+}
+
+/** Down sin transacción: igual que el up, y la fila de control se borra solo tras el éxito de todas las sentencias. */
+async function revertWithoutTransaction(client: Client, file: MigrationFile, timeouts: SessionTimeouts): Promise<void> {
+  try {
+    for (const statement of splitSqlStatements(file.downSql)) await client.query(statement);
+    await client.query("DELETE FROM schema_migrations WHERE version = $1", [file.version]);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "error desconocido";
+    const hint = timeoutHint(error, timeouts);
+    throw new MigrationError(
+      `El down ${file.downFileName} (sin transacción) falló y NO se revirtió: puede haber deshecho parte y la migración sigue registrada como aplicada. ` +
+        `Corrige la causa y vuelve a correr db:rollback: debe ser idempotente. ${detail}${hint ? ` ${hint}` : ""}`,
+      { cause: error },
+    );
+  }
+}
+
 async function revertOne(client: Client, file: MigrationFile, timeouts: SessionTimeouts): Promise<void> {
+  if (!file.transactional) return revertWithoutTransaction(client, file, timeouts);
   await client.query("BEGIN");
   try {
     await client.query(file.downSql);

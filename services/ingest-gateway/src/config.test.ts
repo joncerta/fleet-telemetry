@@ -19,6 +19,7 @@ describe("loadGatewayConfig: ingesta de telemetría", () => {
       INGEST_GATEWAY_MAX_AGE_MS: 604_800_000,
       INGEST_GATEWAY_MAX_POINT_BYTES: 8_192,
       INGEST_GATEWAY_MAX_IN_FLIGHT_PUBLICATIONS: 256,
+      INGEST_GATEWAY_MAX_IN_FLIGHT_AUTH_LOOKUPS: 8,
       INGEST_GATEWAY_DEVICE_RATE_LIMIT_MAX: 60,
       INGEST_GATEWAY_DEVICE_RATE_LIMIT_WINDOW_MS: 60_000,
       INGEST_GATEWAY_TOKEN_CACHE_TTL_MS: 30_000,
@@ -73,6 +74,8 @@ describe("loadGatewayConfig: ingesta de telemetría", () => {
     ["INGEST_GATEWAY_MAX_POINT_BYTES", "65537"],
     ["INGEST_GATEWAY_MAX_IN_FLIGHT_PUBLICATIONS", "0"],
     ["INGEST_GATEWAY_MAX_IN_FLIGHT_PUBLICATIONS", "10001"],
+    ["INGEST_GATEWAY_MAX_IN_FLIGHT_AUTH_LOOKUPS", "0"],
+    ["INGEST_GATEWAY_MAX_IN_FLIGHT_AUTH_LOOKUPS", "101"],
   ])("rechaza %s=%s nombrando la variable", (name, value) => {
     expect(() => loadGatewayConfig({ ...valid, [name]: value })).toThrow(new RegExp(name));
   });

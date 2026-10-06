@@ -2,9 +2,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { TOPICS } from "@fleet/contracts";
 import { createConsumer, createKafka, createLogger, createPool, createProducer, installGracefulShutdown } from "@fleet/platform";
 import { createPersistTelemetryBatch } from "./application/persist-telemetry-batch.js";
+import { createUpdateFleetState } from "./application/update-fleet-state.js";
 import { loadProcessorConfig } from "./config.js";
 import { createKafkaDeadLetterPublisher } from "./infrastructure/kafka-dead-letter-publisher.js";
+import { createKafkaFleetEventPublisher } from "./infrastructure/kafka-fleet-event-publisher.js";
+import { createPgFleetStateUnitOfWork } from "./infrastructure/pg-fleet-state-store.js";
 import { createPgTelemetryRepository } from "./infrastructure/pg-telemetry-repository.js";
+import { createAlertIdGenerator } from "./infrastructure/uuid-v5-alert-ids.js";
 import { createTelemetryBatchHandler } from "./interfaces/kafka/telemetry-batch-handler.js";
 import { createTelemetryConsumerRunner } from "./interfaces/kafka/telemetry-consumer.js";
 
@@ -19,15 +23,32 @@ const logger = createLogger({ service: SERVICE, level: config.LOG_LEVEL });
 
 const kafka = createKafka({ brokers: config.KAFKA_BROKERS, clientId: SERVICE, logger });
 const consumer = createConsumer(kafka, { groupId: config.PROCESSOR_CONSUMER_GROUP });
-// Productor único del proceso, solo para la DLQ. Reintentos acotados con backoff y jitter (los de kafkajs): el peor caso
+// Productor único del proceso, para la DLQ, `vehicle.state` y `fleet.alerts`. Reintentos acotados con backoff y jitter (los de kafkajs): el peor caso
 // suma unos segundos, por debajo del tiempo máximo por envío (PROCESSOR_DLQ_PUBLISH_TIMEOUT_MS), que es lo que decide el fallo.
 const producer = createProducer(kafka, { retry: { retries: 3, initialRetryTime: 100, maxRetryTime: 2_000 } });
 const pool = createPool({ connectionString: config.DATABASE_URL, applicationName: SERVICE, logger });
 
+const clock = { now: () => new Date() };
+
+// Estado de los vehículos y alertas (fase 1b): se actualiza en una transacción y se publica después de persistir cada tramo.
+const fleetState = createUpdateFleetState({
+  unitOfWork: createPgFleetStateUnitOfWork(pool),
+  publisher: createKafkaFleetEventPublisher({ producer, timeoutMs: config.PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS }),
+  alertIds: createAlertIdGenerator(),
+  clock,
+  logger,
+  rules: {
+    stopSpeedMps: config.STOP_SPEED_THRESHOLD_MPS,
+    stopDisplacementM: config.STOP_DISPLACEMENT_THRESHOLD_M,
+    criticalStopMinutes: config.ALERT_CRITICAL_STOP_MINUTES,
+  },
+});
+
 const persistTelemetryBatch = createPersistTelemetryBatch({
   repository: createPgTelemetryRepository(pool),
+  fleetState,
   deadLetters: createKafkaDeadLetterPublisher({ producer, timeoutMs: config.PROCESSOR_DLQ_PUBLISH_TIMEOUT_MS }),
-  clock: { now: () => new Date() },
+  clock,
   sleeper: { sleep: (ms) => delay(ms) },
   // El jitter no necesita aleatoriedad criptográfica.
   random: { next: () => Math.random() },

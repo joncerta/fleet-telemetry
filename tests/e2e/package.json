@@ -15,6 +15,7 @@
   "devDependencies": {
     "@fleet/contracts": "workspace:*",
     "@fleet/eslint-config": "workspace:*",
+    "@fleet/fleet-api": "workspace:*",
     "@fleet/ingest-gateway": "workspace:*",
     "@fleet/processor": "workspace:*",
     "@types/node": "catalog:",

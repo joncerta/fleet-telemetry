@@ -7,7 +7,7 @@ import { TOPICS } from "@fleet/contracts";
 import { createAdmin, createKafka, createLogger } from "@fleet/platform";
 import { AssignerProtocol, type Admin } from "kafkajs";
 
-// Arnés e2e: levanta ingest-gateway y processor DESDE dist/ como procesos hijos, con puertos y consumer group propios
+// Arnés e2e: levanta ingest-gateway, processor y fleet-api DESDE dist/ como procesos hijos, con puertos y consumer group propios
 // del e2e para no chocar con un `pnpm dev` de nadie. Los cierra siempre al terminar, también si un test falla.
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -16,6 +16,11 @@ const KEEP_LOG_RUNS = 10;
 
 /** Puerto del gateway del e2e: distinto del 4001 del `pnpm dev`. */
 export const E2E_GATEWAY_PORT = 14001;
+/** Puerto de fleet-api del e2e: distinto del 4002 del `pnpm dev`. */
+export const E2E_FLEET_API_PORT = 14002;
+/** Fallos de login por IP y por correo, y de canje de código por IP, que tolera fleet-api en el e2e; los tests los usan para agotarlos. */
+export const E2E_LOGIN_FAILURE_LIMIT_MAX = 5;
+export const E2E_PAIR_FAILURE_LIMIT_MAX = 5;
 /** Fallos de autenticación (401) por IP y minuto que tolera el gateway del e2e; los tests lo usan para agotarlo. */
 export const E2E_AUTH_FAILURE_LIMIT_MAX = 20;
 const READY_TIMEOUT_MS = 45_000;
@@ -23,7 +28,7 @@ const POLL_INTERVAL_MS = 250;
 const STOP_TIMEOUT_MS = 12_000;
 
 export interface ServiceDefinition {
-  name: "ingest-gateway" | "processor";
+  name: "ingest-gateway" | "processor" | "fleet-api";
   /** Carpeta del servicio, relativa a la raíz del repo. */
   dir: string;
 }
@@ -31,6 +36,7 @@ export interface ServiceDefinition {
 export const SERVICES: readonly ServiceDefinition[] = [
   { name: "ingest-gateway", dir: "services/ingest-gateway" },
   { name: "processor", dir: "services/processor" },
+  { name: "fleet-api", dir: "services/fleet-api" },
 ];
 
 export interface RunningServices {
@@ -38,6 +44,7 @@ export interface RunningServices {
   /** Fin de cada partición de `telemetry.raw` (offset siguiente al último) cuando se ancló el grupo: el processor del e2e no lee nada anterior. */
   rawBacklogEnd: Record<string, string>;
   gatewayUrl: string;
+  fleetApiUrl: string;
   processorGroup: string;
   /** Carpeta con un archivo de log por servicio, de esta corrida. */
   logDir: string;
@@ -98,6 +105,16 @@ export function childEnv(runId: string): NodeJS.ProcessEnv {
     INGEST_GATEWAY_TRUSTED_PROXY_HOPS: "1",
     INGEST_GATEWAY_AUTH_FAILURE_LIMIT_MAX: String(E2E_AUTH_FAILURE_LIMIT_MAX),
     PROCESSOR_CONSUMER_GROUP: `${E2E_GROUP_PREFIX}${runId}`,
+    FLEET_API_HOST: "127.0.0.1",
+    FLEET_API_PORT: String(E2E_FLEET_API_PORT),
+    // Secreto PROPIO del e2e (nunca el del `.env`): por corrida, de más de 32 bytes. Las cookies de una corrida no valen en otra.
+    SESSION_SECRET: `e2e-only-session-secret-${runId}-0123456789abcdef`,
+    // Igual que el gateway: con 1 salto de proxy un test elige su IP con `X-Forwarded-For` y agota SU límite sin afectar a los demás.
+    FLEET_API_TRUSTED_PROXY_HOPS: "1",
+    FLEET_API_LOGIN_FAILURE_LIMIT_MAX: String(E2E_LOGIN_FAILURE_LIMIT_MAX),
+    FLEET_API_PAIR_FAILURE_LIMIT_MAX: String(E2E_PAIR_FAILURE_LIMIT_MAX),
+    FLEET_API_CORS_ORIGINS: "http://localhost:3000",
+    FLEET_API_COOKIE_SECURE: "false",
   };
 }
 
@@ -211,6 +228,7 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
   const env = childEnv(runId);
   const processorGroup = `${E2E_GROUP_PREFIX}${runId}`;
   const gatewayUrl = `http://127.0.0.1:${E2E_GATEWAY_PORT}`;
+  const fleetApiUrl = `http://127.0.0.1:${E2E_FLEET_API_PORT}`;
 
   const kafka = createKafka({ brokers: options.kafkaBrokers, clientId: `e2e-harness-${runId}`, logger: createLogger({ service: "e2e-harness", level: "error" }) });
   const admin = createAdmin(kafka);
@@ -248,11 +266,16 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
       children,
       async () => (await fetch(`${gatewayUrl}/health`, { signal: AbortSignal.timeout(2_000) })).status === 200,
     );
+    await waitFor(
+      "GET /health de fleet-api con 200",
+      children,
+      async () => (await fetch(`${fleetApiUrl}/health`, { signal: AbortSignal.timeout(2_000) })).status === 200,
+    );
     await waitFor(`que el processor consuma (grupo ${processorGroup})`, children, () => processorIsConsuming(admin, processorGroup));
   } catch (error) {
     await stop();
     throw error;
   }
 
-  return { runId, rawBacklogEnd, gatewayUrl, processorGroup, logDir, stop };
+  return { runId, rawBacklogEnd, gatewayUrl, fleetApiUrl, processorGroup, logDir, stop };
 }

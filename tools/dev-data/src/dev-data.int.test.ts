@@ -1,4 +1,4 @@
-import { createLogger, createPool, defaultMigrationsDir, loadConfig, databaseAdminConfig, migrate, sha256Hex } from "@fleet/platform";
+import { createLogger, createPool, defaultMigrationsDir, hashPassword, loadConfig, databaseAdminConfig, migrate, sha256Hex, verifyPassword } from "@fleet/platform";
 import { createTempDatabase, type TempDatabase } from "@fleet/platform/testing";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import { z } from "zod";
 import { issueDeviceToken, VehicleLookupError } from "./device-token.js";
 import { assertLocalDatabase } from "./local-only.js";
 import { runSeed } from "./seed.js";
-import { SEED_TENANTS, seedVehicles } from "./seed-data.js";
+import { SEED_TENANTS, SEED_USERS, SEED_ZONES, seedVehicles, zoneCenter } from "./seed-data.js";
 
 // Contra TimescaleDB real, en una base temporal con las migraciones reales, conectando como fleet_app (el rol que
 // usan los comandos por defecto): así también se prueba que sus permisos alcanzan.
@@ -34,9 +34,14 @@ afterAll(async () => {
   await db?.drop();
 });
 
+const PASSWORD = "contrasena-de-prueba-12";
+/** scrypt barato para los tests: el de producción cuesta ~150 ms por usuario. El formato y la verificación son los mismos. */
+const cheapHash = (password: string) => hashPassword(password, { N: 1_024, r: 8, p: 1 });
+const seed = () => runSeed(app, { userPassword: PASSWORD, hash: cheapHash });
+
 const count = async (table: string): Promise<number> => {
   // El nombre de la tabla sale de este archivo (nunca de fuera); aun así solo se acepta de una lista.
-  if (!["tenants", "vehicles", "devices"].includes(table)) throw new Error(`tabla no permitida: ${table}`);
+  if (!["tenants", "vehicles", "devices", "zones", "users"].includes(table)) throw new Error(`tabla no permitida: ${table}`);
   const { rows } = await admin.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table}`);
   return Number(rows[0]?.n);
 };
@@ -51,11 +56,11 @@ describe("guardas de base local", () => {
 
 describe("db:seed", () => {
   it("siembra 2 tenants y 15 vehículos por tenant, y una segunda corrida no cambia nada", async () => {
-    const first = await runSeed(app);
-    const second = await runSeed(app);
+    const first = await seed();
+    const second = await seed();
 
-    expect(first).toEqual({ tenantsInserted: 2, vehiclesInserted: 30 });
-    expect(second).toEqual({ tenantsInserted: 0, vehiclesInserted: 0 });
+    expect(first).toEqual({ tenantsInserted: 2, vehiclesInserted: 30, zonesInserted: 8, usersInserted: 2 });
+    expect(second).toEqual({ tenantsInserted: 0, vehiclesInserted: 0, zonesInserted: 0, usersInserted: 0 });
     expect(await count("tenants")).toBe(2);
     expect(await count("vehicles")).toBe(30);
     const { rows } = await admin.query<{ name: string; vehicles: string }>(
@@ -70,7 +75,7 @@ describe("db:seed", () => {
   it("no pisa lo que alguien editó a mano", async () => {
     await admin.query("UPDATE vehicles SET label = 'editado' WHERE id = $1", [seedVehicles()[0]?.id]);
 
-    await runSeed(app);
+    await seed();
 
     const { rows } = await admin.query<{ label: string }>("SELECT label FROM vehicles WHERE id = $1", [seedVehicles()[0]?.id]);
     expect(rows[0]?.label).toBe("editado");
@@ -81,7 +86,7 @@ describe("device:token", () => {
   const norte = SEED_TENANTS[0];
 
   it("crea un dispositivo por placa, guarda el sha256 y no el token en ninguna columna", async () => {
-    await runSeed(app);
+    await seed();
 
     const issued = await issueDeviceToken(app, "NRT101");
 
@@ -96,7 +101,7 @@ describe("device:token", () => {
   });
 
   it("rota: revoca el dispositivo anterior y deja uno solo activo", async () => {
-    await runSeed(app);
+    await seed();
     const vehicleId = seedVehicles()[1]?.id;
     const first = await issueDeviceToken(app, vehicleId ?? "");
 
@@ -123,9 +128,80 @@ describe("device:token", () => {
   });
 
   it("pide el id cuando la placa existe en dos tenants", async () => {
-    await runSeed(app);
+    await seed();
     await admin.query("INSERT INTO vehicles (id, tenant_id, plate) VALUES (gen_random_uuid(), $1, 'NRT101')", [SEED_TENANTS[1]?.id]);
 
     await expect(issueDeviceToken(app, "NRT101")).rejects.toThrow(/usa el id/);
+  });
+});
+
+describe("db:seed: zonas y usuarios", () => {
+  it("siembra las zonas con geometría válida y su tenant, y cada centro cae dentro de su propia zona y de ninguna otra del tenant", async () => {
+    await seed();
+
+    const { rows } = await admin.query<{ kind: string; n: string }>("SELECT kind, count(*)::text AS n FROM zones GROUP BY kind ORDER BY kind");
+    expect(rows).toEqual([
+      { kind: "critical", n: "4" },
+      { kind: "customer", n: "2" },
+      { kind: "depot", n: "2" },
+    ]);
+    for (const zone of SEED_ZONES) {
+      const [lng, lat] = zoneCenter(zone);
+      const hit = await admin.query<{ zone_id: string }>(
+        "SELECT zone_id FROM zones WHERE tenant_id = $1 AND ST_Covers(geom, ST_SetSRID(ST_MakePoint($2, $3), 4326)) ORDER BY zone_id",
+        [zone.tenantId, lng, lat],
+      );
+      expect(hit.rows, zone.name).toEqual([{ zone_id: zone.zoneId }]);
+    }
+  });
+
+  it("una zona de un tenant no contiene los puntos de las del otro (Bogotá y Medellín)", async () => {
+    await seed();
+    const norte = SEED_ZONES.find((zone) => zone.name === "Depósito Norte");
+    if (norte === undefined) throw new Error("falta la zona de demo");
+    const [lng, lat] = zoneCenter(norte);
+
+    const { rows } = await admin.query("SELECT 1 FROM zones WHERE tenant_id = $1 AND ST_Covers(geom, ST_SetSRID(ST_MakePoint($2, $3), 4326))", [SEED_TENANTS[1]?.id, lng, lat]);
+
+    expect(rows).toEqual([]);
+  });
+
+  it("siembra un usuario por tenant cuyo hash es scrypt, verifica con la contraseña y no la contiene", async () => {
+    await seed();
+
+    const { rows } = await admin.query<{ user_id: string; tenant_id: string; email: string; password_hash: string }>(
+      "SELECT user_id, tenant_id, email, password_hash FROM users ORDER BY email",
+    );
+
+    expect(rows.map((row) => row.email)).toEqual(["operador@norte.test", "operador@sur.test"]);
+    expect(rows.map((row) => row.tenant_id)).toEqual(SEED_USERS.map((user) => user.tenantId));
+    for (const row of rows) {
+      expect(row.password_hash).toMatch(/^scrypt\$/);
+      expect(row.password_hash).not.toContain(PASSWORD);
+      await expect(verifyPassword(PASSWORD, row.password_hash)).resolves.toBe(true);
+      await expect(verifyPassword("otra-contrasena", row.password_hash)).resolves.toBe(false);
+    }
+    // Una sal por usuario: la misma contraseña no da el mismo hash.
+    expect(rows[0]?.password_hash).not.toBe(rows[1]?.password_hash);
+  });
+
+  it("el login por correo sin distinguir mayúsculas encuentra al usuario de su tenant", async () => {
+    await seed();
+
+    const { rows } = await app.query<{ tenant_id: string }>("SELECT tenant_id FROM users WHERE lower(email) = lower($1)", ["Operador@SUR.test"]);
+
+    expect(rows).toEqual([{ tenant_id: SEED_TENANTS[1]?.id }]);
+  });
+
+  it("una segunda corrida con otra contraseña no cambia la de los usuarios ya sembrados", async () => {
+    await seed();
+    const before = await admin.query<{ password_hash: string }>("SELECT password_hash FROM users ORDER BY email");
+
+    const again = await runSeed(app, { userPassword: "otra-contrasena-distinta", hash: cheapHash });
+
+    expect(again.usersInserted).toBe(0);
+    expect((await admin.query<{ password_hash: string }>("SELECT password_hash FROM users ORDER BY email")).rows).toEqual(before.rows);
+    expect(await count("users")).toBe(2);
+    expect(await count("zones")).toBe(8);
   });
 });

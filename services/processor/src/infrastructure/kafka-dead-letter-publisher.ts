@@ -1,13 +1,10 @@
 import { TOPICS } from "@fleet/contracts";
 import { DEFAULT_MAX_BATCH_BYTES, splitBySize, withCorrelationId, type FleetMessage, type FleetProducer } from "@fleet/platform";
 import type { DeadLetterPublisher } from "../application/ports.js";
+import { PublishTimeoutError, withTimeout } from "./publish-timeout.js";
 
-export class PublishTimeoutError extends Error {
-  constructor(readonly timeoutMs: number) {
-    super(`El broker no confirmó la publicación en ${timeoutMs} ms.`);
-    this.name = "PublishTimeoutError";
-  }
-}
+// El error y el temporizador son compartidos con el publicador de eventos de la flota; se reexporta el error para quien ya lo importa de aquí.
+export { PublishTimeoutError };
 
 export interface KafkaDeadLetterPublisherOptions {
   /** Productor del proceso (idempotente, `acks=-1`). Solo se usa `sendBatch`. */
@@ -25,8 +22,10 @@ export interface KafkaDeadLetterPublisherOptions {
 }
 
 /**
- * Adaptador de `DeadLetterPublisher` sobre el productor de la plataforma: un solo `sendBatch` por llamada (no un `send`
- * por mensaje). Key = la que decide el caso de uso (`vehicleId` si se conoce), header `correlationId` en cada mensaje.
+ * Adaptador de `DeadLetterPublisher` sobre el productor de la plataforma. Parte la publicación en sub-lotes de a lo sumo
+ * `maxBatchBytes` (`splitBySize`) y envía un `sendBatch` por sub-lote, de a uno y en orden (no un `send` por mensaje): un
+ * tramo entero de rechazos puede superar el 1 MiB que acepta el broker. Si un sub-lote falla, los siguientes no se envían y la
+ * llamada rechaza. Key = la que decide el caso de uso (`vehicleId` si se conoce), header `correlationId` en cada mensaje.
  */
 export function createKafkaDeadLetterPublisher(options: KafkaDeadLetterPublisherOptions): DeadLetterPublisher {
   const topic = options.topic ?? TOPICS.telemetryDlq;
@@ -49,24 +48,4 @@ export function createKafkaDeadLetterPublisher(options: KafkaDeadLetterPublisher
       }, options.timeoutMs);
     },
   };
-}
-
-/**
- * Rechaza con `PublishTimeoutError` si `work` no termina a tiempo (todos los sub-lotes juntos). El temporizador se cancela
- * siempre. `work` recibe `isAbandoned`: tras el vencimiento devuelve `true` y debe dejar de iniciar envíos nuevos.
- */
-async function withTimeout(work: (isAbandoned: () => boolean) => Promise<void>, timeoutMs: number): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  let abandoned = false;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      abandoned = true;
-      reject(new PublishTimeoutError(timeoutMs));
-    }, timeoutMs);
-  });
-  try {
-    await Promise.race([work(() => abandoned), expired]);
-  } finally {
-    clearTimeout(timer);
-  }
 }

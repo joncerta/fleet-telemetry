@@ -28,6 +28,20 @@ const processorConfig = z.object({
   PROCESSOR_INSERT_CHUNK_SIZE: z.coerce.number().int().min(1).max(1_000).default(500),
   /** Tiempo máximo de la publicación en `telemetry.dlq`, en ms. Si se agota, no se confirma el offset del tramo. */
   PROCESSOR_DLQ_PUBLISH_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(8_000),
+  /**
+   * Tiempo máximo de la publicación en `vehicle.state` y `fleet.alerts`, en ms. Si se agota, no se confirma el offset del tramo: se
+   * reentrega y se republica el estado vigente (los consumidores descartan los repetidos por `seq`).
+   */
+  PROCESSOR_EVENTS_PUBLISH_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(8_000),
+  /**
+   * Minutos que un vehículo debe llevar detenido (contra la hora del fix GPS, no la del servidor) dentro de una zona crítica para
+   * levantar la alerta `critical_zone_stop`. El umbral es inclusivo. Por defecto 20.
+   */
+  ALERT_CRITICAL_STOP_MINUTES: z.coerce.number().int().min(1).max(1_440).default(20),
+  /** Un punto con velocidad MENOR que esto (m/s) está detenido. Por defecto 0,5 (~1,8 km/h: ruido de un GPS quieto). */
+  STOP_SPEED_THRESHOLD_MPS: z.coerce.number().positive().max(10).default(0.5),
+  /** Sin velocidad en el punto, un desplazamiento MENOR que esto (m) respecto del punto previo cuenta como detenido. Por defecto 15. */
+  STOP_DISPLACEMENT_THRESHOLD_M: z.coerce.number().positive().max(1_000).default(15),
 });
 
 export const configSchema = z

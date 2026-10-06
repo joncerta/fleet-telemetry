@@ -7,6 +7,7 @@ export {
   shutdownConfig,
   kafkaConfig,
   logConfig,
+  sessionSecretConfig,
   LOG_LEVELS,
   type LogLevel,
 } from "./config/fragments.js";
@@ -64,6 +65,8 @@ export {
 } from "./migrations/runner.js";
 
 export { sha256Hex } from "./security/hash.js";
+export { DEFAULT_SCRYPT_PARAMS, hashPassword, verifyPassword, type ScryptParams } from "./security/password.js";
+export { createSessionCodec, SESSION_SECRET_MIN_BYTES, type SessionClaims, type SessionCodec } from "./security/session-codec.js";
 
 export {
   installGracefulShutdown,
