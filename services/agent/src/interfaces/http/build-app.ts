@@ -99,9 +99,13 @@ export async function buildApp(deps: AppDependencies): Promise<AgentApp> {
     const mapped = mapError(error);
     if (mapped.headers !== undefined) void reply.headers(mapped.headers);
     if (error instanceof AgentFailedError || error instanceof AgentTimeoutError) {
-      // Solo los tipos: la causa (un error del proveedor del modelo) puede arrastrar cabeceras, claves o la pregunta del usuario.
-      const cause: unknown = error.cause;
-      request.log.error({ errorType: error.name, causeType: cause instanceof Error ? cause.name : typeof cause }, "El agente no pudo responder");
+      // Solo el resumen seguro que adjuntó el adaptador (`failure`: clase, estado HTTP y `error.type` del proveedor): el mensaje de la causa
+      // puede arrastrar cabeceras, claves o la pregunta del usuario. Con 401/403/404 la configuración del proveedor está rota (el breaker
+      // no se abre): línea propia para alertar.
+      const failure = error instanceof AgentFailedError ? error.failure : undefined;
+      const fields = { errorType: error.name, tenantId: request.auth?.identity.tenantId, ...failure };
+      if (failure?.providerMisconfigured === true) request.log.error(fields, "El proveedor del modelo rechazó la configuración");
+      else request.log.error(fields, "El agente no pudo responder");
     } else if (error instanceof AgentCancelledError) {
       request.log.info({ errorType: error.name }, "Pregunta cancelada por el cliente");
     } else if (mapped.statusCode >= 500) {

@@ -4,6 +4,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { createAgent } from "langchain";
 import { AgentCancelledError, AgentFailedError, AgentTimeoutError } from "../application/errors.js";
 import type { ChatAgent, ToolCallRecord, UserContext } from "../application/ports.js";
+import { describeProviderError } from "./provider-error.js";
 
 /** Tokens que consumió una pregunta, sumados sobre todas las llamadas al modelo. Solo cifras: nunca el texto. */
 export interface ModelUsage {
@@ -81,7 +82,7 @@ export function createLangChainChatAgent(options: LangChainChatAgentOptions): Ch
         // El tiempo total manda sobre la cancelación: si ambos ocurrieron, la pregunta venció.
         if (timeout.aborted) throw new AgentTimeoutError();
         if (callerSignal?.aborted === true) throw new AgentCancelledError();
-        throw new AgentFailedError({ cause: error });
+        throw new AgentFailedError({ cause: error, failure: describeProviderError(error) });
       }
     },
   };

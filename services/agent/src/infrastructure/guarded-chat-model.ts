@@ -5,6 +5,7 @@ import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { BaseMessage } from "@langchain/core/messages";
 import type { ChatResult } from "@langchain/core/outputs";
 import CircuitBreaker from "opossum";
+import { statusOf } from "./provider-error.js";
 import type { BreakerSettings } from "./resilient-fleet-client.js";
 
 /** El circuito hacia el proveedor del modelo está abierto: no se hizo ninguna llamada. */
@@ -59,11 +60,6 @@ export interface GuardedChatModel extends BaseChatModel {
   bindTools: NonNullable<BaseChatModel["bindTools"]>;
   breakerState(): BreakerState;
   shutdown(): void;
-}
-
-function statusOf(error: unknown): number | undefined {
-  if (typeof error !== "object" || error === null || !("status" in error)) return undefined;
-  return typeof error.status === "number" ? error.status : undefined;
 }
 
 function codeOf(error: unknown): string | undefined {
