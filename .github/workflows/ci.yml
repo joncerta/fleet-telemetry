@@ -173,6 +173,8 @@ jobs:
       LOG_LEVEL: info
       # >= 32 bytes (fleet-api no arranca con menos).
       SESSION_SECRET: ci-ephemeral-session-secret-0123456789abcdef
+      # El agente del perfil `app` arranca con el modelo con guion: CI no tiene (ni necesita) una API key de Anthropic.
+      AGENT_MODEL_PROVIDER: scripted
       TF_IN_AUTOMATION: "1"
     steps:
       - name: Checkout
@@ -246,9 +248,9 @@ jobs:
       - name: Start app profile
         run: docker compose --profile app up -d --wait --wait-timeout 240
 
-      - name: Check gateway and fleet-api health
+      - name: Check gateway, fleet-api and agent health
         run: |
-          for service in ingest-gateway fleet-api; do
+          for service in ingest-gateway fleet-api agent; do
             status="$(docker inspect --format '{{.State.Health.Status}}' "fleet-telemetry-$service-1")"
             echo "$service: $status"
             [ "$status" = "healthy" ] || exit 1

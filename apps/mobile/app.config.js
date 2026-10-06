@@ -14,11 +14,15 @@ module.exports = {
   slug: "fleet-driver",
   scheme: "fleetdriver",
   version: "0.1.0",
+  // Coherente con `version`: un binario solo recibiría un update OTA de su misma versión de app. Hoy no hay `expo-updates` (no hay OTA);
+  // si se agrega, esta política evita enviar JS nuevo a un binario con código nativo distinto.
+  runtimeVersion: { policy: "appVersion" },
   orientation: "portrait",
   userInterfaceStyle: "light",
   newArchEnabled: true,
   android: {
     package: "co.fleet.driver",
+    // Solo para builds locales: en EAS manda `appVersionSource: "remote"` (eas.json) y el `autoIncrement` del perfil `production`.
     versionCode: 1,
     permissions: [
       "ACCESS_COARSE_LOCATION",

@@ -10,5 +10,5 @@
     "isolatedModules": true,
     "types": ["node"]
   },
-  "include": ["index.ts", "src", "modules", "*.config.ts", "*.config.mts"]
+  "include": ["index.ts", "src", "modules", "config/**/*.ts", "*.config.ts", "*.config.mts"]
 }

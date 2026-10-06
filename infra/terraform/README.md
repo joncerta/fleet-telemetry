@@ -85,6 +85,7 @@ Ninguna se adivinó; son variables sin valor por defecto (ver `envs/dev/terrafor
 | `monthly_budget_usd`, `budget_emails` | ¿Presupuesto mensual y quién recibe las alertas? |
 | `owner`, `cost_center` | Valores de las etiquetas. |
 | `image_tag` | Lo fija el pipeline de despliegue (SHA del commit): los tags de ECR son inmutables. |
+| `agent_fleet_api_url` | ¿Cuál es la URL https del ALB (dominio del certificado)? El agente llama a `fleet-api` por ahí. |
 | `fleet_api_cors_origins` | ¿Qué dominio sirve la web? Orígenes `https://...` autorizados a llamar a `fleet-api` con la cookie de sesión. |
 
 ## Decisiones de diseño
@@ -96,7 +97,8 @@ Ninguna se adivinó; son variables sin valor por defecto (ver `envs/dev/terrafor
 - **ECS Fargate**: 0,25 vCPU y 512 MiB por tarea, 1 réplica por servicio, sistema de archivos raíz de solo lectura y usuario no root. Un despliegue que no llega a healthy se revierte solo. Las migraciones son una tarea de un solo uso (`migrate`) que lanza el despliegue con `aws ecs run-task` antes de actualizar los servicios.
 - **ALB y SSE**: `idle_timeout` de **65 s** (el de AWS es 60 s). Dos `precondition` en el ALB exigen **2 x heartbeat del SSE (30 s) <= 65 < keep-alive del backend (72 s, el de Fastify)**. Con 120 s (antes) el ALB mantenía conexiones que Fastify ya había cerrado a los 72 s y respondía 502 de forma intermitente: el ALB debe cerrar primero.
 - **Liveness frente a readiness**: el healthcheck del contenedor y el del target group usan **`/health/live`** (sin dependencias). `/health` consulta la base (readiness) y queda para compose y los e2e: con él en ECS, un corte de la base haría fallar a la vez el healthcheck de todas las tareas, ECS las mataría y el ALB quedaría sin destinos.
-- **ALB**: `/v1/telemetry/*` va al gateway (prioridad 100) y el resto de `/v1/*` (auth, dispositivos, lecturas y SSE) a `fleet-api` (prioridad 200).
+- **ALB**: `/v1/telemetry/*` va al gateway (prioridad 100), `/v1/chat` y `/v1/chat/*` al agente (150) y el resto de `/v1/*` (auth, dispositivos, lecturas y SSE) a `fleet-api` (prioridad 200).
+- **Agente**: tarea `agent` (:4003) con rol de tarea propio sin permisos AWS. `ANTHROPIC_API_KEY` vive en `app/anthropic`, se escribe con la variable efímera `anthropic_api_key` (`TF_VAR_anthropic_api_key=... terraform apply`, solo al crear o rotar junto con `anthropic_api_key_version`; en los demás planes puede quedar sin valor) y no queda en el estado. Llama a `fleet-api` por `agent_fleet_api_url` (la URL https del ALB). Con `agent_desired_count = 0` hasta escribir la clave.
 - **Secretos**: las contraseñas de la base y el `SESSION_SECRET` se generan con **`ephemeral "random_password"`** y se escriben con **`secret_string_wo` + `secret_string_wo_version`** (aws `~> 6.67`, random `~> 3.9`): no quedan en el estado ni en el plan; Secrets Manager (KMS) es su única copia. Hay un secreto por rol (`db/admin`, `db/app`, `db/ro`) y **un rol de ejecución por tarea** que solo puede leer los secretos de sus propias `secrets` (se derivan del `valueFrom`): únicamente `migrate` lee `db/admin`. Las tareas los reciben como variables de entorno vía `secrets` de ECS; ningún valor aparece en el código.
 - **Brokers sin `terraform_remote_state`**: `envs/dev` los publica en un `aws_ssm_parameter` y `envs/dev-topics` los lee con un data source. Así la raíz de tópicos no puede leer el estado de la plataforma (que, aun sin contraseñas, tiene todo el inventario).
 - **Logs**: todos los grupos con retención definida (30 días por defecto) y cifrados con KMS.
@@ -112,7 +114,7 @@ Precios de lista de us-east-1, sin verificar contra la calculadora de AWS; la re
 | **MSK Serverless**: US$0,75 por hora de clúster (~US$548) + particiones (10 x US$0,0015/h, ~US$11) + datos | **~US$560** |
 | NAT Gateway (1) + datos | ~US$33 |
 | ALB | ~US$16 + LCU |
-| Fargate: 3 tareas de 0,25 vCPU / 0,5 GiB (gateway, processor, fleet-api) | ~US$27 |
+| Fargate: 4 tareas de 0,25 vCPU / 0,5 GiB (gateway, processor, fleet-api, agent) | ~US$36 |
 | EC2 t3.medium + 70 GiB de EBS gp3 + snapshots | ~US$40 |
 | KMS (2 claves), Secrets Manager, ECR, CloudWatch (logs, 10 alarmas, Container Insights) | ~US$10 a 20 |
 | **Total** | **~US$690 a 710** (cuatro secretos de Secrets Manager, ~US$1,60, ya incluidos en la fila anterior) |

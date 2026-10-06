@@ -131,19 +131,21 @@ resource "aws_iam_role_policy" "execution" {
 }
 
 # --- IAM: un rol de tarea por servicio, con la política mínima que declara la raíz (Kafka por tópico, etc.) ----------------
+# Todas las tareas tienen su propio rol (identidad propia en CloudTrail); sin `task_policy_json` el rol no tiene permisos (p. ej. el agente,
+# que solo habla HTTP con fleet-api y con la API del modelo).
 resource "aws_iam_role" "task" {
-  for_each = { for name, task in local.all_tasks : name => task if task.task_policy_json != null }
+  for_each = local.all_tasks
 
   name               = "${var.name}-${each.key}"
   assume_role_policy = data.aws_iam_policy_document.tasks_assume.json
 }
 
 resource "aws_iam_role_policy" "task" {
-  for_each = aws_iam_role.task
+  for_each = { for name, task in local.all_tasks : name => task if task.task_policy_json != null }
 
   name   = "least-privilege"
-  role   = each.value.id
-  policy = local.all_tasks[each.key].task_policy_json
+  role   = aws_iam_role.task[each.key].id
+  policy = each.value.task_policy_json
 }
 
 # --- Definiciones de tarea (servicios y jobs de un solo uso, como las migraciones) -------------------------------------
@@ -156,7 +158,7 @@ resource "aws_ecs_task_definition" "this" {
   cpu                      = each.value.cpu
   memory                   = each.value.memory
   execution_role_arn       = aws_iam_role.execution[each.key].arn
-  task_role_arn            = try(aws_iam_role.task[each.key].arn, null)
+  task_role_arn            = aws_iam_role.task[each.key].arn
 
   runtime_platform {
     operating_system_family = "LINUX"

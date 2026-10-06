@@ -1,5 +1,5 @@
 # Sin perfil: solo infraestructura (timescaledb, redpanda, redpanda-init).
-# Perfil `app`: además migrate (un solo uso), ingest-gateway, processor y fleet-api. agent y web se agregan cuando existan.
+# Perfil `app`: además migrate (un solo uso), ingest-gateway, processor, fleet-api y agent. La web se agrega cuando exista.
 # Nunca `docker compose down -v`: borra el volumen de datos.
 name: fleet-telemetry
 
@@ -271,6 +271,60 @@ services:
         - node
         - -e
         - "fetch('http://127.0.0.1:4002/health',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Agente LangChain. No usa Kafka ni la base: llama a fleet-api (con la cookie del usuario, detrás de un circuit breaker) y al modelo.
+  # SESSION_SECRET es el MISMO de fleet-api (valida su cookie). ANTHROPIC_API_KEY sale de .env/entorno, nunca de este archivo; con
+  # AGENT_MODEL_PROVIDER=scripted (modelo con guion, para pruebas) no hace falta. Healthcheck contra /health/live: /health devuelve 503
+  # con el breaker hacia fleet-api abierto y no debe marcar al agente como caído por eso.
+  agent:
+    profiles: ["app"]
+    image: fleet-telemetry/agent:local
+    build:
+      context: .
+      dockerfile: infra/docker/service.Dockerfile
+      target: service
+      args:
+        SERVICE: agent
+    depends_on:
+      fleet-api:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "127.0.0.1:4003:4003"
+    environment:
+      AGENT_HOST: "0.0.0.0"
+      AGENT_PORT: "4003"
+      FLEET_API_URL: "http://fleet-api:4002"
+      SESSION_SECRET: "${SESSION_SECRET:?Falta SESSION_SECRET (>= 32 bytes), copia .env.example a .env}"
+      AGENT_MODEL_PROVIDER: "${AGENT_MODEL_PROVIDER:-anthropic}"
+      ANTHROPIC_API_KEY:
+      AGENT_CORS_ORIGINS: "${AGENT_CORS_ORIGINS:-http://localhost:3000}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      SHUTDOWN_TIMEOUT_MS: "${SHUTDOWN_TIMEOUT_MS:-15000}"
+      AGENT_MODEL:
+      AGENT_MAX_ITERATIONS:
+      AGENT_TIMEOUT_MS:
+      AGENT_TRUSTED_PROXY_HOPS:
+      AGENT_RATE_LIMIT_MAX:
+      AGENT_RATE_LIMIT_WINDOW_MS:
+      AGENT_USER_RATE_LIMIT_MAX:
+      AGENT_USER_RATE_LIMIT_WINDOW_MS:
+      AGENT_FLEET_API_TIMEOUT_MS:
+      AGENT_BREAKER_ERROR_THRESHOLD_PERCENTAGE:
+      AGENT_BREAKER_VOLUME_THRESHOLD:
+      AGENT_BREAKER_RESET_TIMEOUT_MS:
+      AGENT_BREAKER_ROLLING_WINDOW_MS:
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4003/health/live',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
       interval: 5s
       timeout: 5s
       retries: 12
