@@ -182,3 +182,9 @@ playwright/.cache/
 
 # Claude Code: preferencias locales de cada persona
 .claude/settings.local.json
+
+# k6: tokens de dispositivos de carga, resúmenes y resultados de corridas (solo locales)
+infra/k6/.run/
+
+# Terraform: configuración del backend remoto (bucket y clave KMS; sin credenciales, pero propia de cada persona)
+backend.hcl
