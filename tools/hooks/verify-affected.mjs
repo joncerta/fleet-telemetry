@@ -15,15 +15,16 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { WORKSPACE_DIRS, affectedPackageDirs, resolveRoot, stripAnsi } from "./lib.mjs";
+
 const MAX_CONSECUTIVE_BLOCKS = 3;
 const CHECK_TIMEOUT_MS = 9 * 60 * 1000; // por debajo del timeout del hook en settings.json (600 s)
-const WORKSPACE_DIRS = ["apps", "services", "packages"];
 const ROOT_FILES = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "turbo.json"];
 // Subagentes que no editan código: no hace falta verificar al terminar.
 const READ_ONLY_AGENTS = new Set(["architect-reviewer", "frontend-reviewer", "qa-verifier", "Explore", "Plan", "claude-code-guide"]);
 
 const input = readStdinJson();
-const root = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
+const root = resolveRoot({ cwd: input.cwd, projectDir: process.env.CLAUDE_PROJECT_DIR, processCwd: process.cwd() }, gitTopLevel);
 
 if (READ_ONLY_AGENTS.has(input.agent_type)) process.exit(0);
 if (!existsSync(join(root, "package.json"))) process.exit(0);
@@ -59,7 +60,7 @@ process.stderr.write(
   `Verificación automática fallida en: ${packages.map((p) => p.name).join(", ")}.\n` +
     `Comando: ${run.command}\n` +
     `Corrige la causa real. No saltes tests, no debilites aserciones ni silencies tipos (regla 17 de CLAUDE.md).${lastAttempt}\n\n` +
-    tail(run.output, 80) +
+    tail(stripAnsi(run.output), 80) +
     "\n",
 );
 process.exit(2);
@@ -108,12 +109,16 @@ function readPackage(cwd, dir) {
 }
 
 function affectedPackages(cwd, files) {
-  const dirs = new Set();
-  for (const f of files) {
-    const [top, pkg] = f.split("/");
-    if (WORKSPACE_DIRS.includes(top) && pkg) dirs.add(`${top}/${pkg}`);
+  return affectedPackageDirs(files).map((d) => readPackage(cwd, d)).filter(Boolean);
+}
+
+/** Raíz git de `dir`, o undefined si no es un repo (o git no está disponible). */
+function gitTopLevel(dir) {
+  try {
+    return git(dir, ["rev-parse", "--show-toplevel"]).trim() || undefined;
+  } catch {
+    return undefined;
   }
-  return [...dirs].map((d) => readPackage(cwd, d)).filter(Boolean);
 }
 
 function allPackages(cwd) {
@@ -169,7 +174,7 @@ function runChecks(cwd, pkgs) {
     const res = spawnSync("pnpm", args, {
       cwd,
       encoding: "utf8",
-      env: { ...process.env, CI: "1", FORCE_COLOR: "0" },
+      env: { ...process.env, CI: "1", FORCE_COLOR: "0", NO_COLOR: "1" },
       maxBuffer: 64 * 1024 * 1024,
       shell: process.platform === "win32", // pnpm es un .cmd en Windows
       timeout: CHECK_TIMEOUT_MS,
