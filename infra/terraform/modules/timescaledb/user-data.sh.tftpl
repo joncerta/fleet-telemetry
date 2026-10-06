@@ -1,0 +1,48 @@
+#!/bin/bash
+# Arranque de TimescaleDB autogestionado (primer arranque de la instancia). Sin secretos en este archivo: las contraseñas se leen
+# de Secrets Manager con el rol de la instancia y viven solo en un archivo de /run (memoria, modo 0600).
+set -euo pipefail
+
+REGION="${region}"
+SECRET_ID="${secret_arn}"
+DATA_DEVICE="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${data_volume_serial}"
+DATA_DIR="/var/lib/timescale"
+
+dnf install -y docker jq xfsprogs
+systemctl enable --now docker
+
+# Volumen de datos (cifrado con KMS): se formatea solo si está vacío, y se monta en cada reinicio.
+for attempt in $(seq 1 60); do
+  [ -b "$DATA_DEVICE" ] && break
+  sleep 5
+done
+[ -b "$DATA_DEVICE" ] || { echo "El volumen de datos no apareció" >&2; exit 1; }
+blkid "$DATA_DEVICE" >/dev/null 2>&1 || mkfs.xfs "$DATA_DEVICE"
+mkdir -p "$DATA_DIR"
+grep -q "$DATA_DIR" /etc/fstab || echo "$DATA_DEVICE $DATA_DIR xfs defaults,nofail 0 2" >> /etc/fstab
+mount -a
+# La imagen timescaledb-ha ejecuta postgres con uid 1000.
+chown 1000:1000 "$DATA_DIR"
+
+# Contraseña del superusuario desde Secrets Manager (el rol de la instancia solo puede leer este secreto).
+umask 077
+ENV_FILE="/run/timescaledb.env"
+for attempt in $(seq 1 30); do
+  SECRET="$(aws secretsmanager get-secret-value --region "$REGION" --secret-id "$SECRET_ID" --query SecretString --output text 2>/dev/null)" && break
+  sleep 10
+done
+[ -n "$${SECRET:-}" ] || { echo "No se pudo leer el secreto de la base" >&2; exit 1; }
+printf 'POSTGRES_PASSWORD=%s\n' "$(printf '%s' "$SECRET" | jq -r .postgres_password)" > "$ENV_FILE"
+unset SECRET
+
+# Misma imagen que en local (docker-compose.yml). NO se define `fleet.environment`: esa marca solo existe en local y es lo que
+# impide que db:rollback corra contra una base compartida. Las extensiones y los roles los crea la migración 001 (job `migrate`).
+docker run -d --name timescaledb --restart unless-stopped \
+  --env-file "$ENV_FILE" \
+  -e POSTGRES_DB=fleet -e POSTGRES_USER=fleet -e TIMESCALEDB_TELEMETRY=off \
+  -v "$DATA_DIR:/home/postgres/pgdata" \
+  -p 5432:5432 \
+  --log-driver=awslogs --log-opt awslogs-region="$REGION" --log-opt awslogs-group="${log_group}" --log-opt awslogs-stream=timescaledb \
+  "${image}" \
+  postgres -c shared_buffers=${shared_buffers} -c max_connections=${max_connections}
+rm -f "$ENV_FILE"
