@@ -3,6 +3,7 @@
 - **Estado:** aceptado
 - **Fecha:** 2026-10-04
 - **Nota de numeración:** el ADR-002 está reservado para la persistencia (fase 1d).
+- **Hueco en las migraciones (fase 1d):** no existe la `007`; tras la `006` se aplicó la `008`. La `007` estaba reservada para el continuous aggregate, que quedó en la `009` (`telemetry_hourly`). **La `007` no se puede usar nunca más:** el runner rechaza una migración pendiente con número menor que la última aplicada, y la `008` ya lo está en las bases locales; aplicarla solo en una base nueva haría divergir los entornos. Los números no tienen que ser consecutivos (la prueba de ida y vuelta indexa por posición, no por versión). El siguiente número libre es el `010`.
 
 ## Decisiones
 
