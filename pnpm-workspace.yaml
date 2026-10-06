@@ -7,6 +7,8 @@ packages:
   - "tests/e2e"
   # Comandos solo para local (db:seed, device:token). Paquete privado para que Turborepo lo incluya en typecheck, lint y test.
   - "tools/dev-data"
+  # Simulador de vehículos (pnpm simulate), solo para la demo y para validar el dashboard.
+  - "tools/simulator"
 
 # Versiones compartidas: cada paquete declara `catalog:` en vez de repetir el rango.
 catalog:
@@ -25,3 +27,6 @@ catalog:
 # pnpm bloquea los scripts de instalación por defecto. esbuild (vía tsx y vitest) valida su binario nativo.
 allowBuilds:
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - expo-constants@57.0.21

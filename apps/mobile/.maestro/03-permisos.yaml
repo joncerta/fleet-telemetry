@@ -1,0 +1,38 @@
+# Permisos en orden: primer plano (diálogo del sistema) y, antes de pedir el de segundo plano, la divulgación visible.
+# El paso final (elegir "Permitir todo el tiempo" en los ajustes del sistema) varía por versión de Android y se prueba a mano.
+# Uso: maestro test -e PAIRING_CODE=ABCD2345 apps/mobile/.maestro/03-permisos.yaml
+appId: co.fleet.driver
+env:
+  DEV_CLIENT_URL: "fleetdriver://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081"
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    permissions:
+      all: deny
+- runFlow: subflows/open-dev-client.yaml
+- runFlow: subflows/pair.yaml
+- assertVisible:
+    id: "tracking-state"
+    text: "Sin permiso de ubicación"
+- tapOn:
+    id: "start-shift"
+# 1) Primer plano: diálogo del sistema.
+- tapOn:
+    text: "(?i)(while using the app|mientras la app está en uso|mientras se usa la app).*"
+# 2) Divulgación antes del segundo plano.
+- extendedWaitUntil:
+    visible:
+      id: "background-disclosure"
+    timeout: 10000
+- assertVisible: "Ubicación en segundo plano"
+# Cancelar deja el turno sin iniciar y sin permiso.
+- tapOn:
+    id: "disclosure-cancel"
+- assertNotVisible:
+    id: "background-disclosure"
+- assertVisible:
+    id: "start-shift"
+- assertVisible:
+    id: "tracking-state"
+    text: "Sin permiso de ubicación"

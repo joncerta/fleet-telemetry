@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Comandos solo para local: pnpm db:seed (datos de demo) y pnpm device:token (tokens de dispositivo).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",

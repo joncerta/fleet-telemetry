@@ -1,0 +1,15 @@
+# Vincula el dispositivo con un código de un solo uso. Requiere -e PAIRING_CODE=ABCD2345
+# (lo genera el operador con POST /v1/devices/pairing-codes; ver los comandos en el README del flujo 04).
+appId: co.fleet.driver
+---
+- assertVisible:
+    id: "pairing-screen"
+- tapOn:
+    id: "code-input"
+- inputText: ${PAIRING_CODE}
+- tapOn:
+    id: "link-button"
+- extendedWaitUntil:
+    visible:
+      id: "shift-screen"
+    timeout: 15000

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createServer, type IncomingMessage } from "node:http";
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,7 @@ import { TOPICS } from "@fleet/contracts";
 import { createAdmin, createKafka, createLogger } from "@fleet/platform";
 import { AssignerProtocol, type Admin } from "kafkajs";
 
-// Arnés e2e: levanta ingest-gateway, processor y fleet-api DESDE dist/ como procesos hijos, con puertos y consumer group propios
+// Arnés e2e: levanta ingest-gateway, processor, fleet-api y agent DESDE dist/ como procesos hijos, con puertos y consumer group propios
 // del e2e para no chocar con un `pnpm dev` de nadie. Los cierra siempre al terminar, también si un test falla.
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -18,6 +19,14 @@ const KEEP_LOG_RUNS = 10;
 export const E2E_GATEWAY_PORT = 14001;
 /** Puerto de fleet-api del e2e: distinto del 4002 del `pnpm dev`. */
 export const E2E_FLEET_API_PORT = 14002;
+/** Puerto del agente del e2e: distinto del 4003 del `pnpm dev`. */
+export const E2E_AGENT_PORT = 14003;
+/**
+ * Breaker del agente en el e2e: abre con 3 llamadas fallidas y prueba de nuevo a los 2 s, para que el e2e del breaker no espere los 15 s de
+ * producción. El agente del e2e usa el modelo con guion (`AGENT_MODEL_PROVIDER=scripted`): no necesita API key y es determinista.
+ */
+export const E2E_AGENT_BREAKER_VOLUME_THRESHOLD = 3;
+export const E2E_AGENT_BREAKER_RESET_TIMEOUT_MS = 2_000;
 /** Fallos de login por IP y por correo, y de canje de código por IP, que tolera fleet-api en el e2e; los tests los usan para agotarlos. */
 export const E2E_LOGIN_FAILURE_LIMIT_MAX = 5;
 export const E2E_PAIR_FAILURE_LIMIT_MAX = 5;
@@ -28,7 +37,7 @@ const POLL_INTERVAL_MS = 250;
 const STOP_TIMEOUT_MS = 12_000;
 
 export interface ServiceDefinition {
-  name: "ingest-gateway" | "processor" | "fleet-api";
+  name: "ingest-gateway" | "processor" | "fleet-api" | "agent";
   /** Carpeta del servicio, relativa a la raíz del repo. */
   dir: string;
 }
@@ -37,6 +46,7 @@ export const SERVICES: readonly ServiceDefinition[] = [
   { name: "ingest-gateway", dir: "services/ingest-gateway" },
   { name: "processor", dir: "services/processor" },
   { name: "fleet-api", dir: "services/fleet-api" },
+  { name: "agent", dir: "services/agent" },
 ];
 
 export interface RunningServices {
@@ -45,6 +55,10 @@ export interface RunningServices {
   rawBacklogEnd: Record<string, string>;
   gatewayUrl: string;
   fleetApiUrl: string;
+  agentUrl: string;
+  /** Servidor de control del arnés (parar y volver a levantar un servicio) y su token: ver `startControlServer`. */
+  controlUrl: string;
+  controlToken: string;
   processorGroup: string;
   /** Carpeta con un archivo de log por servicio, de esta corrida. */
   logDir: string;
@@ -53,6 +67,73 @@ export interface RunningServices {
 }
 
 const E2E_GROUP_PREFIX = "processor-e2e-";
+
+const CONTROLLED_SERVICES = ["ingest-gateway", "fleet-api", "agent"] as const;
+type ControlledService = (typeof CONTROLLED_SERVICES)[number];
+const isControlled = (name: string | undefined): name is ControlledService => CONTROLLED_SERVICES.some((candidate) => candidate === name);
+
+interface ControlServer {
+  url: string;
+  token: string;
+  close(): Promise<void>;
+}
+
+/**
+ * Servidor de control del arnés, solo en 127.0.0.1 y con un token por corrida: `POST /services/<nombre>/stop|start`.
+ *
+ * Los tests corren en otro proceso que el arnés (vitest los aísla en workers) y solo reciben valores serializables con `inject()`: no pueden
+ * parar ni levantar un servicio por sí mismos. Con este servidor lo piden al arnés, que sigue siendo el dueño de TODOS los procesos: el
+ * teardown cierra también el que se haya vuelto a levantar, y no queda ninguno huérfano. Lo usa el e2e del circuit breaker del agente
+ * ("con fleet-api detenido...").
+ */
+async function startControlServer(options: { children: Child[]; env: NodeJS.ProcessEnv; logDir: string; healthUrls: Record<ControlledService, string> }): Promise<ControlServer> {
+  const token = randomUUID();
+
+  const handle = async (request: IncomingMessage): Promise<void> => {
+    if (request.method !== "POST" || request.headers.authorization !== `Bearer ${token}`) throw new Error("petición de control no autorizada");
+    const [, scope, name, action] = new URL(request.url ?? "/", "http://127.0.0.1").pathname.split("/");
+    if (scope !== "services" || !isControlled(name)) throw new Error("servicio no controlable");
+    const index = options.children.findIndex((child) => child.service.name === name);
+    const current = options.children[index];
+    const definition = SERVICES.find((service) => service.name === name);
+    if (current === undefined || definition === undefined) throw new Error("servicio desconocido");
+
+    if (action === "stop") {
+      await stopChild(current);
+      return;
+    }
+    if (action === "start") {
+      if (!current.exited) throw new Error(`${name} ya está levantado`);
+      const started = spawnService(definition, options.env, options.logDir);
+      options.children[index] = started;
+      await waitFor(`GET /health de ${name} (reiniciado) con 200`, [started], async () => (await fetch(options.healthUrls[name], { signal: AbortSignal.timeout(2_000) })).status === 200);
+      return;
+    }
+    throw new Error("acción desconocida");
+  };
+
+  const server = createServer((request, response) => {
+    handle(request).then(
+      () => response.writeHead(204).end(),
+      (error: unknown) => response.writeHead(500, { "content-type": "text/plain" }).end(error instanceof Error ? error.message : "error"),
+    );
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (typeof address !== "object" || address === null) throw new Error("el servidor de control no tiene dirección");
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    token,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
+  };
+}
 
 const entryOf = (service: ServiceDefinition) => join(REPO_ROOT, service.dir, "dist", "main.js");
 
@@ -115,6 +196,18 @@ export function childEnv(runId: string): NodeJS.ProcessEnv {
     FLEET_API_PAIR_FAILURE_LIMIT_MAX: String(E2E_PAIR_FAILURE_LIMIT_MAX),
     FLEET_API_CORS_ORIGINS: "http://localhost:3000",
     FLEET_API_COOKIE_SECURE: "false",
+    AGENT_HOST: "127.0.0.1",
+    AGENT_PORT: String(E2E_AGENT_PORT),
+    FLEET_API_URL: `http://127.0.0.1:${E2E_FLEET_API_PORT}`,
+    AGENT_CORS_ORIGINS: "http://localhost:3000",
+    AGENT_MODEL_PROVIDER: "scripted",
+    // Hermético: aunque el .env tenga una clave real, el e2e no la usa ni se la pasa al hijo.
+    ANTHROPIC_API_KEY: "",
+    AGENT_TRUSTED_PROXY_HOPS: "1",
+    AGENT_USER_RATE_LIMIT_MAX: "200",
+    AGENT_FLEET_API_TIMEOUT_MS: "2000",
+    AGENT_BREAKER_VOLUME_THRESHOLD: String(E2E_AGENT_BREAKER_VOLUME_THRESHOLD),
+    AGENT_BREAKER_RESET_TIMEOUT_MS: String(E2E_AGENT_BREAKER_RESET_TIMEOUT_MS),
   };
 }
 
@@ -229,6 +322,7 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
   const processorGroup = `${E2E_GROUP_PREFIX}${runId}`;
   const gatewayUrl = `http://127.0.0.1:${E2E_GATEWAY_PORT}`;
   const fleetApiUrl = `http://127.0.0.1:${E2E_FLEET_API_PORT}`;
+  const agentUrl = `http://127.0.0.1:${E2E_AGENT_PORT}`;
 
   const kafka = createKafka({ brokers: options.kafkaBrokers, clientId: `e2e-harness-${runId}`, logger: createLogger({ service: "e2e-harness", level: "error" }) });
   const admin = createAdmin(kafka);
@@ -243,11 +337,14 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
   }
   const children = SERVICES.map((service) => spawnService(service, env, logDir));
 
+  // El servidor de control se crea al final, cuando todo ya responde; `stop` lo cierra si llegó a existir.
+  const control: { server?: ControlServer } = {};
   let stopped = false;
   const stop = async (): Promise<void> => {
     if (stopped) return;
     stopped = true;
     process.off("exit", killSync);
+    await control.server?.close();
     await Promise.all(children.map((child) => stopChild(child).catch(() => undefined)));
     // Limpieza del grupo del e2e: falla si el proceso no llegó a salir limpio (Windows); no importa, es de un solo uso.
     await admin.deleteGroups([processorGroup]).catch(() => undefined);
@@ -271,11 +368,24 @@ export async function startServices(options: { kafkaBrokers: readonly string[] }
       children,
       async () => (await fetch(`${fleetApiUrl}/health`, { signal: AbortSignal.timeout(2_000) })).status === 200,
     );
+    await waitFor(
+      "GET /health del agente con 200",
+      children,
+      async () => (await fetch(`${agentUrl}/health`, { signal: AbortSignal.timeout(2_000) })).status === 200,
+    );
     await waitFor(`que el processor consuma (grupo ${processorGroup})`, children, () => processorIsConsuming(admin, processorGroup));
   } catch (error) {
     await stop();
     throw error;
   }
 
-  return { runId, rawBacklogEnd, gatewayUrl, fleetApiUrl, processorGroup, logDir, stop };
+  const healthUrls = { "ingest-gateway": `${gatewayUrl}/health`, "fleet-api": `${fleetApiUrl}/health`, agent: `${agentUrl}/health` };
+  try {
+    control.server = await startControlServer({ children, env, logDir, healthUrls });
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+  return { runId, rawBacklogEnd, gatewayUrl, fleetApiUrl, agentUrl, controlUrl: control.server.url, controlToken: control.server.token, processorGroup, logDir, stop };
 }
+

@@ -1,0 +1,10 @@
+# Generado por `expo prebuild` / `expo run:android`: se regenera desde app.config.js y los config plugins.
+/android
+/ios
+.expo/
+dist/
+*.apk
+*.aab
+# Salida de Gradle de los módulos nativos locales (expo-modules), se regenera al compilar.
+modules/*/android/build/
+modules/*/android/.gradle/

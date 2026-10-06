@@ -1,0 +1,14 @@
+# En un development build, tras `clearState` el dev client olvida el servidor de Metro y muestra su lanzador.
+# Si la app todavía no está a la vista, abre el bundle de Metro. En un build de release no hace nada.
+appId: co.fleet.driver
+---
+- runFlow:
+    when:
+      notVisible:
+        id: "app-root"
+    commands:
+      - openLink: ${DEV_CLIENT_URL}
+      - extendedWaitUntil:
+          visible:
+            id: "app-root"
+          timeout: 90000
