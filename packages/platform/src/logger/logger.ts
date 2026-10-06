@@ -39,6 +39,10 @@ export const REDACTED_KEYS: ReadonlySet<string> = new Set([
   "placa",
   "address",
   "direccion",
+  // Alias del vehículo y datos de las personas del catálogo (nombre, correo): red de seguridad, nunca se registran a propósito.
+  "label",
+  "name",
+  "email",
   ...["driver", "conductor"].flatMap((prefix) => DRIVER_FIELDS.map((field) => `${prefix}${field}`)),
 ]);
 
@@ -47,7 +51,7 @@ export const REDACTED_KEYS: ReadonlySet<string> = new Set([
  * compara por nombre exacto, así que cada clave se expande a camelCase, PascalCase, snake_case, kebab-case, etc.
  */
 const KEY_WORDS: readonly (readonly string[])[] = [
-  ...["lat", "lon", "lng", "long", "latitude", "longitude", "position", "location", "coordinates", "coords", "geom", "geometry", "point", "wkt", "plate", "placa", "address", "direccion"].map(
+  ...["lat", "lon", "lng", "long", "latitude", "longitude", "position", "location", "coordinates", "coords", "geom", "geometry", "point", "wkt", "plate", "placa", "address", "direccion", "label", "name", "email"].map(
     (word) => [word],
   ),
   ["geo", "json"],
