@@ -1,5 +1,5 @@
 import { assertStackAvailable } from "@fleet/platform/testing";
-import { test as base, expect, type Page } from "@playwright/test";
+import { test as base, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { loadE2eEnv, type E2eEnv } from "./env";
 import { startStack, type E2eStack } from "./stack";
 import { createFleetDriver, type FleetDriver } from "./telemetry";
@@ -56,12 +56,28 @@ export const test = base.extend<{ page: Page }, WorkerFixtures>({
     { scope: "worker" },
   ],
   page: async ({ page }, use) => {
-    await page.route("https://tiles.openfreemap.org/**", (route) =>
-      route.request().url().includes("/styles/") ? route.fulfill({ json: BLANK_MAP_STYLE }) : route.abort(),
-    );
+    await routeMapTiles(page);
     await use(page);
   },
 });
+
+/** Sin red externa: el estilo del mapa es uno en blanco y el resto de peticiones a los tiles se aborta. */
+export async function routeMapTiles(page: Page): Promise<void> {
+  await page.route("https://tiles.openfreemap.org/**", (route) =>
+    route.request().url().includes("/styles/") ? route.fulfill({ json: BLANK_MAP_STYLE }) : route.abort(),
+  );
+}
+
+/**
+ * Un contexto de navegador NUEVO (cookies propias, como otro usuario en otro equipo) con las mismas opciones de la configuración y la misma
+ * ruta de tiles que el fixture `page`. Quien lo abre debe cerrarlo.
+ */
+export async function openIsolatedPage(browser: Browser, baseURL: string | undefined): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext({ baseURL, locale: "es-CO", timezoneId: "America/Bogota" });
+  const page = await context.newPage();
+  await routeMapTiles(page);
+  return { context, page };
+}
 
 export { expect };
 
