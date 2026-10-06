@@ -238,19 +238,31 @@ jobs:
 
       # --- Perfil `app` de compose + humo de k6 con su verificación de conteos ---
       # Runner efímero: no hay backlog en Redpanda, así que no hace falta anclar el grupo (anchor-group.mjs).
+      # Con las 6 imágenes el disco quedaba al 94% y Redpanda se marca unhealthy por debajo del 5% libre: se liberan las
+      # herramientas preinstaladas del runner que este job no usa (Android, .NET, Haskell, CodeQL; ~20 GB).
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Start infrastructure
         run: docker compose up -d --wait --wait-timeout 240
 
+      # Todas las imágenes (incluida la web) parten del mismo stage `deps` del Dockerfile: el `pnpm install` se hace una vez y su capa
+      # se comparte. Tras construir se libera la caché de build (ya no hace falta) para dejar disco al resto del job.
       - name: Build app images
-        run: docker compose --profile app build
+        run: |
+          docker compose --profile app build
+          docker builder prune --all --force
+          df -h /
 
       # Falla si migrate falla (set -eu) o si un servicio con healthcheck no llega a healthy.
       - name: Start app profile
         run: docker compose --profile app up -d --wait --wait-timeout 240
 
-      - name: Check gateway, fleet-api and agent health
+      - name: Check gateway, fleet-api, agent and web health
         run: |
-          for service in ingest-gateway fleet-api agent; do
+          for service in ingest-gateway fleet-api agent web; do
             status="$(docker inspect --format '{{.State.Health.Status}}' "fleet-telemetry-$service-1")"
             echo "$service: $status"
             [ "$status" = "healthy" ] || exit 1

@@ -23,4 +23,7 @@ infra/terraform
 docs
 tests/e2e/.logs
 apps/**/.next
+apps/**/.next-e2e
+apps/web/public/vendor
+apps/web/e2e/.logs
 apps/**/.expo

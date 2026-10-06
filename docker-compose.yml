@@ -1,5 +1,5 @@
 # Sin perfil: solo infraestructura (timescaledb, redpanda, redpanda-init).
-# Perfil `app`: además migrate (un solo uso), ingest-gateway, processor, fleet-api y agent. La web se agrega cuando exista.
+# Perfil `app`: además migrate (un solo uso), ingest-gateway, processor, fleet-api, agent y web.
 # Nunca `docker compose down -v`: borra el volumen de datos.
 name: fleet-telemetry
 
@@ -325,6 +325,41 @@ services:
         - node
         - -e
         - "fetch('http://127.0.0.1:4003/health/live',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Dashboard Next.js (standalone), mismo Dockerfile con `--target web`. Las NEXT_PUBLIC_* se fijan AL COMPILAR (quedan en el bundle del
+  # navegador): los args apuntan a los puertos publicados en 127.0.0.1 (el navegador del humano, no la red de compose). Para otro
+  # origen hay que reconstruir la imagen. Web y APIs deben compartir host (`localhost`) para que el navegador mande la cookie; por eso el
+  # origen de la web es http://localhost:3000, el que admiten por defecto FLEET_API_CORS_ORIGINS y AGENT_CORS_ORIGINS. No lleva secretos.
+  web:
+    profiles: ["app"]
+    image: fleet-telemetry/web:local
+    build:
+      context: .
+      dockerfile: infra/docker/service.Dockerfile
+      target: web
+      args:
+        NEXT_PUBLIC_FLEET_API_URL: "http://localhost:4002"
+        NEXT_PUBLIC_AGENT_URL: "http://localhost:4003"
+        NEXT_PUBLIC_MAP_STYLE_URL: "${NEXT_PUBLIC_MAP_STYLE_URL:-https://tiles.openfreemap.org/styles/positron}"
+    depends_on:
+      fleet-api:
+        condition: service_healthy
+      agent:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      # La imagen no trae curl: `fetch` de Node. /login es estática y no depende de las APIs.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/login',{signal:AbortSignal.timeout(2000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
       interval: 5s
       timeout: 5s
       retries: 12
