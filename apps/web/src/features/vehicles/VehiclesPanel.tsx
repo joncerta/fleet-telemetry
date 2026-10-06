@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { useFleet, useServerNow, useServices, useThrottledFleet } from "../../app-services/services-context";
-import { Panel, PanelNote } from "../../components/panel";
+import { CollapsiblePanelView, PanelNote, usePanelOpen } from "../../components/panel";
 import { StatusLabel } from "../../components/status";
 import { formatAgo, formatInteger } from "../../lib/format";
 import type { FleetStore } from "../fleet/fleet-store";
@@ -71,7 +71,8 @@ export function VehicleList({ rows, selectedId, onSelect }: { rows: readonly Veh
   );
 }
 
-export function VehiclesPanel() {
+/** Filas y lista: solo se monta con el panel abierto, así el map + sort de cientos de vehículos no corre cada 500 ms para un panel cerrado. */
+function VehiclesBody() {
   const { fleetStore } = useServices();
   // A la cadencia del mapa (500 ms), no con cada lote de eventos (200 ms): la lista tiene cientos de filas.
   const vehicles = useThrottledFleet(selectVehicles);
@@ -86,9 +87,32 @@ export function VehiclesPanel() {
   const neverReported = total === null ? 0 : Math.max(0, total - rows.length);
 
   return (
-    <Panel id="vehicles" title="Vehículos" defaultOpen={false} count={ready ? rows.length : undefined}>
+    <>
       {ready ? <VehicleList rows={rows} selectedId={selectedId} onSelect={select} /> : <PanelNote>Esperando datos en vivo…</PanelNote>}
       {ready && neverReported > 0 && <p className="mt-2 text-xs text-ink-muted">{neverReported} vehículos aún no han reportado.</p>}
-    </Panel>
+    </>
   );
 }
+
+const selectVehicleCount = (state: FleetStore) => Object.keys(state.vehicles).length;
+
+export function VehiclesPanel() {
+  const ready = useFleet((state) => state.ready);
+  // Contador barato (un número): el encabezado no recalcula las filas.
+  const count = useFleet(selectVehicleCount);
+  const selectedId = useFleet((state) => state.selectedVehicleId);
+  const [open, setOpen] = usePanelOpen("vehicles", false);
+
+  // La lista es la única representación textual y accesible de la selección (el mapa es un canvas): al seleccionar un vehículo, en el mapa
+  // o desde una alerta, se abre. No se guarda como preferencia: no es una decisión del usuario sobre el panel.
+  useEffect(() => {
+    if (selectedId !== null) setOpen(true, false);
+  }, [selectedId, setOpen]);
+
+  return (
+    <CollapsiblePanelView id="vehicles" title="Vehículos" count={ready ? `${count} con datos` : undefined} open={open} onToggle={() => setOpen(!open)}>
+      <VehiclesBody />
+    </CollapsiblePanelView>
+  );
+}
+
