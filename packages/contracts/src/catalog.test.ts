@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  PLATE_MAX_LENGTH,
+  USER_LIST_MAX_LIMIT,
+  VEHICLE_LIST_MAX_LIMIT,
   userListItemSchema,
   userListQuerySchema,
   userListResponseSchema,
@@ -10,6 +13,17 @@ import {
 } from "./index.js";
 
 const vehicle = { vehicleId: "3c9e7a10-5b2d-4e6f-9a81-7d4c0b2e5f13", plate: "ABC123", label: null, hasActiveDevice: false, createdAt: "2026-10-06T12:00:00.000Z" };
+
+describe("constantes de límites del catálogo", () => {
+  it("coinciden con lo que los esquemas aceptan y rechazan", () => {
+    expect(vehicleCreateRequestSchema.safeParse({ plate: "A".repeat(PLATE_MAX_LENGTH) }).success).toBe(true);
+    expect(vehicleCreateRequestSchema.safeParse({ plate: "A".repeat(PLATE_MAX_LENGTH + 1) }).success).toBe(false);
+    expect(vehicleListQuerySchema.safeParse({ limit: VEHICLE_LIST_MAX_LIMIT }).success).toBe(true);
+    expect(vehicleListQuerySchema.safeParse({ limit: VEHICLE_LIST_MAX_LIMIT + 1 }).success).toBe(false);
+    expect(userListQuerySchema.safeParse({ limit: USER_LIST_MAX_LIMIT }).success).toBe(true);
+    expect(userListQuerySchema.safeParse({ limit: USER_LIST_MAX_LIMIT + 1 }).success).toBe(false);
+  });
+});
 
 describe("alta de vehículo (vehicleCreateRequestSchema)", () => {
   it.each([
