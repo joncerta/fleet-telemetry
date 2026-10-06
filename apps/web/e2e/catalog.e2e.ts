@@ -1,13 +1,9 @@
-import { randomBytes } from "node:crypto";
 import { PAIRING_CODE_ALPHABET, PAIRING_CODE_LENGTH } from "@fleet/contracts";
 import type { Page } from "@playwright/test";
 import { NORTE_USER } from "./support/env";
 import { connectionStatus, expect, login, openPanel, test } from "./support/fixtures";
 
 const CODE_FORMAT = new RegExp(`^[${PAIRING_CODE_ALPHABET}]{${String(PAIRING_CODE_LENGTH)}}$`);
-
-/** Placa única por corrida (alfanumérica, sin guion): el test se repite sobre una base con historial. */
-const uniquePlate = (): string => `E2E${randomBytes(4).toString("hex").toUpperCase()}`;
 
 async function openNewVehicleForm(page: Page) {
   await openPanel(page, "Vincular dispositivo");
@@ -16,8 +12,10 @@ async function openNewVehicleForm(page: Page) {
   return panel;
 }
 
-test("nuevo vehículo: placa y nombre crean el vehículo y generan el código en el mismo paso; queda en el catálogo", async ({ page, env, stack: _stack }) => {
-  const plate = uniquePlate();
+// Cada test pide sus placas a `e2eVehicles`: son únicas por corrida y el fixture las borra al terminar (con sus códigos), pase o falle.
+
+test("nuevo vehículo: placa y nombre crean el vehículo y generan el código en el mismo paso; queda en el catálogo", async ({ page, env, stack: _stack, e2eVehicles }) => {
+  const plate = e2eVehicles.plate();
   await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
   await expect(connectionStatus(page)).toContainText("En vivo");
   const panel = await openNewVehicleForm(page);
@@ -34,8 +32,13 @@ test("nuevo vehículo: placa y nombre crean el vehículo y generan el código en
   await expect(panel.getByRole("option", { name: `${plate} — Camión de prueba e2e` })).toHaveCount(1);
 });
 
-test("placa repetida: el servidor la rechaza y la pantalla lo dice sin generar otro código", async ({ page, env, stack: _stack }) => {
-  const plate = uniquePlate();
+test("placa repetida: el servidor la rechaza, la pantalla lo dice y deja elegido el vehículo existente para generar su código", async ({
+  page,
+  env,
+  stack: _stack,
+  e2eVehicles,
+}) => {
+  const plate = e2eVehicles.plate();
   await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
   await expect(connectionStatus(page)).toContainText("En vivo");
   const panel = await openNewVehicleForm(page);
@@ -49,11 +52,51 @@ test("placa repetida: el servidor la rechaza y la pantalla lo dice sin generar o
   await panel.getByLabel("Vehículo").selectOption({ label: "Nuevo vehículo" });
   await panel.getByLabel("Placa").fill(plate.toLowerCase());
   await panel.getByRole("button", { name: "Crear y generar código" }).click();
-  await expect(panel.getByRole("alert")).toHaveText("Ya existe un vehículo con esa placa.");
+  await expect(panel.getByRole("alert")).toHaveText("Ya existe un vehículo con esa placa. La seleccionamos para que generes su código.");
   await expect(panel.getByText(CODE_FORMAT)).toHaveCount(0);
+  await expect(panel.getByRole("option", { name: new RegExp(`^${plate}`), selected: true })).toHaveCount(1);
+
+  await panel.getByRole("button", { name: "Generar código" }).click();
+  await expect(panel.getByText(`Código para ${plate}`)).toBeVisible();
+  await expect(panel.getByText(CODE_FORMAT)).toBeVisible();
 });
 
-test("placa inválida: se avisa antes de enviar, sin tocar el servidor", async ({ page, env, stack: _stack }) => {
+test("fallo parcial: el vehículo se crea pero el código falla; queda elegido, se avisa y al reintentar se obtiene el código", async ({
+  page,
+  env,
+  stack: _stack,
+  e2eVehicles,
+}) => {
+  const plate = e2eVehicles.plate();
+  // Solo la primera petición del código falla (el servidor responde 500); el reintento llega al servidor real.
+  await page.route(
+    "**/v1/devices/pairing-codes",
+    (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": route.request().headers().origin ?? "*", "access-control-allow-credentials": "true" },
+        body: "{}",
+      }),
+    { times: 1 },
+  );
+  await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
+  await expect(connectionStatus(page)).toContainText("En vivo");
+  const panel = await openNewVehicleForm(page);
+
+  await panel.getByLabel("Placa").fill(plate);
+  await panel.getByRole("button", { name: "Crear y generar código" }).click();
+
+  await expect(panel.getByRole("alert")).toContainText("El vehículo se creó, pero no se pudo generar el código");
+  await expect(panel.getByText(CODE_FORMAT)).toHaveCount(0);
+  // El vehículo creado quedó elegido en el selector, así que basta con reintentar.
+  await expect(panel.getByRole("option", { name: new RegExp(`^${plate}`), selected: true })).toHaveCount(1);
+  await panel.getByRole("button", { name: "Generar código" }).click();
+  await expect(panel.getByText(`Código para ${plate}`)).toBeVisible();
+  await expect(panel.getByText(CODE_FORMAT)).toBeVisible();
+});
+
+test("placa inválida: se avisa antes de enviar, el foco va al campo y no se toca el servidor", async ({ page, env, stack: _stack }) => {
   await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
   const panel = await openNewVehicleForm(page);
   let posted = false;
@@ -63,6 +106,8 @@ test("placa inválida: se avisa antes de enviar, sin tocar el servidor", async (
 
   await panel.getByRole("button", { name: "Crear y generar código" }).click();
   await expect(panel.getByRole("alert")).toHaveText("Escribe la placa.");
+  await expect(panel.getByLabel("Placa")).toBeFocused();
+  await expect(panel.getByLabel("Placa")).toHaveAttribute("aria-invalid", "true");
   await panel.getByLabel("Placa").fill("AB#1");
   await panel.getByRole("button", { name: "Crear y generar código" }).click();
   await expect(panel.getByRole("alert")).toContainText("La placa solo lleva letras y dígitos");
@@ -76,4 +121,19 @@ test("usuarios: el panel lista al operador de Norte y nada de Sur", async ({ pag
   await expect(list.getByRole("listitem").filter({ hasText: "Operador Norte" })).toContainText(NORTE_USER);
   await expect(page.getByText(/sur\.test/)).toHaveCount(0);
   await expect(page.getByText("Operador Sur")).toHaveCount(0);
+});
+
+test("usuarios: nada se pide hasta abrir el panel (datos personales)", async ({ page, env, stack: _stack }) => {
+  const requested: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/v1/users")) requested.push(request.url());
+  });
+  await login(page, NORTE_USER, env.SEED_USER_PASSWORD);
+  await expect(connectionStatus(page)).toContainText("En vivo");
+  // Si una preferencia guardada lo dejara abierto, la prueba no mide lo que dice: con un usuario nuevo el panel arranca cerrado.
+  await expect(page.getByRole("button", { name: /^Usuarios/ })).toHaveAttribute("aria-expanded", "false");
+  expect(requested).toEqual([]);
+  await openPanel(page, "Usuarios");
+  await expect(page.getByRole("list", { name: "Usuarios" })).toBeVisible();
+  expect(requested).toHaveLength(1);
 });

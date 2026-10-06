@@ -484,6 +484,15 @@ export const PLATE_TAKEN_ERROR_CODE = "plate_taken";
 /** Máximo de la etiqueta (alias) de un vehículo al darlo de alta. */
 export const VEHICLE_LABEL_MAX_LENGTH = 64;
 
+/** Máximo de caracteres de una placa (canónica). */
+export const PLATE_MAX_LENGTH = 32;
+
+/** Tope de `limit` en `GET /v1/vehicles`. */
+export const VEHICLE_LIST_MAX_LIMIT = 500;
+
+/** Tope de `limit` en `GET /v1/users`. */
+export const USER_LIST_MAX_LIMIT = 500;
+
 /**
  * Forma de una placa CANÓNICA: letras y dígitos en mayúsculas, sin espacios ni guiones (`ABC123`, `ABC12D`). Al normalizar se quitan los
  * espacios y los guiones, así que `ABC-123`, `ABC 123` y `abc123` son LA MISMA placa y se guardan como `ABC123`.
@@ -496,7 +505,7 @@ const LABEL_PATTERN = /^[^\p{Cc}\u202A-\u202E\u2066-\u2069]*$/u;
 /** Vehículo del catálogo del tenant (con o sin datos de telemetría). Desde v1. */
 export const vehicleCatalogItemSchema = z.object({
   vehicleId: z.uuid().describe("Identificador del vehículo. Desde v1."),
-  plate: z.string().min(1).max(32).describe("DATO PERSONAL (Ley 1581). Placa, única dentro del tenant. Desde v1."),
+  plate: z.string().min(1).max(PLATE_MAX_LENGTH).describe("DATO PERSONAL (Ley 1581). Placa, única dentro del tenant. Desde v1."),
   label: z
     .string()
     .min(1)
@@ -509,14 +518,14 @@ export type VehicleCatalogItem = z.infer<typeof vehicleCatalogItemSchema>;
 
 /** Querystring de `GET /v1/vehicles`. Llega como texto: los números se convierten. Entrada del servidor. Desde v1. */
 export const vehicleListQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).default(200).describe("Máximo de vehículos devueltos (1 a 500). Por defecto 200. Desde v1."),
+  limit: z.coerce.number().int().min(1).max(VEHICLE_LIST_MAX_LIMIT).default(200).describe("Máximo de vehículos devueltos (1 a 500). Por defecto 200. Desde v1."),
 });
 export type VehicleListQuery = z.infer<typeof vehicleListQuerySchema>;
 
 /** Respuesta de `GET /v1/vehicles`: el catálogo del tenant ordenado por placa. Desde v1. */
 export const vehicleListResponseSchema = z.object({
   items: z.array(vehicleCatalogItemSchema).describe("Vehículos del tenant, ordenados por placa. A lo sumo `limit`. Desde v1."),
-  limit: z.number().int().min(1).max(500).describe("Tope aplicado a esta consulta. Si `items` tiene `limit` elementos puede haber más. Desde v1."),
+  limit: z.number().int().min(1).max(VEHICLE_LIST_MAX_LIMIT).describe("Tope aplicado a esta consulta. Si `items` tiene `limit` elementos puede haber más. Desde v1."),
 });
 export type VehicleListResponse = z.infer<typeof vehicleListResponseSchema>;
 
@@ -533,7 +542,7 @@ export const vehicleCreateRequestSchema = z.object({
     .toUpperCase()
     .overwrite((value) => value.replace(/[\s-]+/g, ""))
     .min(1)
-    .max(32)
+    .max(PLATE_MAX_LENGTH)
     .regex(PLATE_PATTERN, { error: "la placa son solo letras y dígitos (se ignoran espacios y guiones)" })
     .describe("DATO PERSONAL (Ley 1581). Placa canónica: mayúsculas, sin espacios ni guiones. Única dentro del tenant. Desde v1."),
   label: z
@@ -558,7 +567,7 @@ export type UserListItem = z.infer<typeof userListItemSchema>;
 
 /** Querystring de `GET /v1/users`. Entrada del servidor. Desde v1. */
 export const userListQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).default(100).describe("Máximo de usuarios devueltos (1 a 500). Por defecto 100. Desde v1."),
+  limit: z.coerce.number().int().min(1).max(USER_LIST_MAX_LIMIT).default(100).describe("Máximo de usuarios devueltos (1 a 500). Por defecto 100. Desde v1."),
 });
 export type UserListQuery = z.infer<typeof userListQuerySchema>;
 

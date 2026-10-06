@@ -6,7 +6,8 @@ import { idle, ready } from "../../lib/loadable";
 import { userItem } from "../../test-support/catalog-fixtures";
 import { CollapsiblePanelView } from "../../components/panel";
 import { panelError } from "../../components/panel-error";
-import { createUsersController } from "./users-controller";
+import { formatInteger } from "../../lib/format";
+import { createUsersController, USERS_LIMIT } from "./users-controller";
 import { UsersBody } from "./UsersPanel";
 
 type Api = Pick<FleetApi, "listUsers">;
@@ -34,11 +35,41 @@ describe("users-controller", () => {
     expect(controller.store.getState().users.data).toHaveLength(1);
     expect(controller.store.getState().users.error).toMatch(/No se pudo conectar para cargar los usuarios/);
 
-    listUsers.mockImplementationOnce(() => new Promise(() => undefined));
-    void controller.load();
+    let release: (value: { items: ReturnType<typeof userItem>[] }) => void = () => undefined;
+    listUsers.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const retry = controller.load();
     // `loading` conserva el error: el aviso no se desmonta ni se re-anuncia al recargar.
-    expect(controller.store.getState().users.error).not.toBeNull();
+    expect(controller.store.getState().users).toMatchObject({ status: "loading" });
+    expect(controller.store.getState().users.error).toMatch(/No se pudo conectar/);
+
+    // El reintento exitoso reemplaza la lista y borra el error.
+    release({ items: [userItem({ name: "Ana" }), userItem({ name: "Luis" })] });
+    await retry;
+    expect(controller.store.getState().users).toMatchObject({ status: "ready", error: null, updatedAt: 7 });
+    expect(controller.store.getState().users.data).toHaveLength(2);
+  });
+
+  it("loadOnce (al abrir el panel): no pide nada antes, pide una sola vez y no repite con datos", async () => {
+    const listUsers = vi.fn<Api["listUsers"]>(() => Promise.resolve({ items: [userItem()] }));
+    const controller = createUsersController({ listUsers });
+    expect(listUsers).not.toHaveBeenCalled();
+    expect(controller.store.getState().users.data).toBeNull();
+    await Promise.all([controller.loadOnce(), controller.loadOnce()]);
+    await controller.loadOnce();
+    expect(listUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it("loadOnce tras un dispose (doble montaje de StrictMode) vuelve a pedir (no se queda cargando para siempre)", async () => {
+    const listUsers = vi.fn<Api["listUsers"]>(
+      (_limit, signal) => new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new DOMException("cancelada", "AbortError")))),
+    );
+    const controller = createUsersController({ listUsers });
+    void controller.loadOnce();
     controller.dispose();
+    listUsers.mockResolvedValueOnce({ items: [userItem()] });
+    await controller.loadOnce();
+    expect(listUsers).toHaveBeenCalledTimes(2);
+    expect(controller.store.getState().users.status).toBe("ready");
   });
 
   it.each([
@@ -66,6 +97,12 @@ describe("users-controller", () => {
 
 describe("UsersBody", () => {
   const render = (users: Parameters<typeof UsersBody>[0]["users"]) => renderToStaticMarkup(<UsersBody users={users} onRetry={() => undefined} />);
+
+  it("una lista que llega al tope avisa que hay más", () => {
+    const items = Array.from({ length: USERS_LIMIT }, () => userItem());
+    expect(render(ready(items, 0))).toContain(`Se muestran los primeros ${formatInteger(USERS_LIMIT)} usuarios.`);
+    expect(render(ready([userItem()], 0))).not.toContain("Se muestran los primeros");
+  });
 
   it("cargando", () => {
     expect(render(idle())).toContain("Cargando…");

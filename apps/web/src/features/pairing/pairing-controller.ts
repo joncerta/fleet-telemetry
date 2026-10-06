@@ -1,11 +1,11 @@
-import type { PairingCode, VehicleCatalogItem } from "@fleet/contracts";
+import { VEHICLE_LIST_MAX_LIMIT, type PairingCode, type VehicleCatalogItem } from "@fleet/contracts";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { FleetApi } from "../../lib/api/fleet-api";
 import { failed, idle, loading, ready, type Loadable } from "../../lib/loadable";
-import { createdButNotPairedMessage, listErrorMessage, pairingErrorMessage, validateVehicleForm, vehicleCreateErrorMessage } from "./pairing-errors";
+import { createdButNotPairedMessage, listErrorMessage, pairingErrorMessage, validateVehicleForm, vehicleCreateFailure } from "./pairing-errors";
 
 /** Tope del catálogo que pide el panel (el máximo del contrato). */
-export const CATALOG_LIMIT = 500;
+export const CATALOG_LIMIT = VEHICLE_LIST_MAX_LIMIT;
 
 const byPlate = new Intl.Collator("es-CO", { numeric: true, sensitivity: "base" });
 
@@ -13,6 +13,9 @@ const byPlate = new Intl.Collator("es-CO", { numeric: true, sensitivity: "base" 
 export function sortCatalog(items: readonly VehicleCatalogItem[]): VehicleCatalogItem[] {
   return [...items].sort((a, b) => byPlate.compare(a.plate, b.plate));
 }
+
+/** El catálogo llegó al tope pedido: puede haber más vehículos de los que se ven. */
+export const isCatalogTruncated = (items: readonly VehicleCatalogItem[]): boolean => items.length >= CATALOG_LIMIT;
 
 /** Cuántos vehículos del catálogo no tienen dispositivo activo. */
 export const withoutDevice = (items: readonly VehicleCatalogItem[]): number => items.filter((item) => !item.hasActiveDevice).length;
@@ -32,7 +35,7 @@ export interface PairingState {
   readonly labelError: string | null;
   readonly result: PairingResult | null;
   /** Vehículo creado cuyo código falló: la UI lo elige en la lista para reintentar. */
-  readonly createdVehicleId: string | null;
+  readonly suggestedVehicleId: string | null;
 }
 
 const INITIAL: PairingState = {
@@ -42,10 +45,10 @@ const INITIAL: PairingState = {
   plateError: null,
   labelError: null,
   result: null,
-  createdVehicleId: null,
+  suggestedVehicleId: null,
 };
 
-const CLEAN = { error: null, plateError: null, labelError: null, result: null, createdVehicleId: null } as const;
+const CLEAN = { error: null, plateError: null, labelError: null, result: null, suggestedVehicleId: null } as const;
 
 export interface PairingController {
   readonly store: StoreApi<PairingState>;
@@ -103,7 +106,7 @@ export function createPairingController(
       if (submitRequest !== request || isAbort(error)) return;
       store.setState(
         justCreated
-          ? { submit: "failed", error: createdButNotPairedMessage(error), createdVehicleId: vehicleId }
+          ? { submit: "failed", error: createdButNotPairedMessage(error), suggestedVehicleId: vehicleId }
           : { submit: "failed", error: pairingErrorMessage(error) },
       );
     }
@@ -135,10 +138,25 @@ export function createPairingController(
         created = await api.createVehicle(form.request, request.signal);
       } catch (error) {
         if (submitRequest !== request || isAbort(error)) return;
-        store.setState({ submit: "failed", error: vehicleCreateErrorMessage(error) });
+        const failure = vehicleCreateFailure(error);
+        if (failure.field === "plate") store.setState({ submit: "failed", plateError: failure.message });
+        else store.setState({ submit: "failed", error: failure.message });
+        if (failure.plateTaken) {
+          // El catálogo local puede estar desactualizado: se recarga y, si la placa existe, se deja elegida para generar su código.
+          await loadCatalog();
+          if (submitRequest !== request) return;
+          const existing = store.getState().catalog.data?.find((item) => item.plate === form.request.plate);
+          if (existing !== undefined) {
+            store.setState({ plateError: null, error: `${failure.message} La seleccionamos para que generes su código.`, suggestedVehicleId: existing.vehicleId });
+          }
+        }
         return;
       }
       if (submitRequest !== request) return;
+      // El vehículo ya existe en el servidor: entra al catálogo local sin esperar al refresco (si este falla, el selector lo muestra igual).
+      store.setState((state) => ({
+        catalog: { ...state.catalog, data: sortCatalog([...(state.catalog.data ?? []).filter((item) => item.vehicleId !== created.vehicleId), created]) },
+      }));
       await pairVehicle(request, created.vehicleId, created.plate, true);
     },
     clearFeedback() {
