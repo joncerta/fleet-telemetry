@@ -62,15 +62,16 @@ describe("VehicleSimulator", () => {
   });
 
   it("todos los puntos caen en Colombia con [lon, lat] (la longitud es la negativa)", () => {
+    // Un solo expect sobre los puntos fuera del área: cinco por punto (~35 000 puntos) superaban el timeout en el runner de CI.
+    const outside: { vehicle: number; lon: number; lat: number }[] = [];
     for (let v = 0; v < config.vehicles; v += 1) {
       for (const p of pointsOf(config, v)) {
-        expect(p.lon).toBeGreaterThanOrEqual(COLOMBIA_BBOX.minLon);
-        expect(p.lon).toBeLessThanOrEqual(COLOMBIA_BBOX.maxLon);
-        expect(p.lat).toBeGreaterThanOrEqual(COLOMBIA_BBOX.minLat);
-        expect(p.lat).toBeLessThanOrEqual(COLOMBIA_BBOX.maxLat);
-        expect(p.lon).toBeLessThan(0);
+        const inside =
+          p.lon >= COLOMBIA_BBOX.minLon && p.lon <= COLOMBIA_BBOX.maxLon && p.lat >= COLOMBIA_BBOX.minLat && p.lat <= COLOMBIA_BBOX.maxLat && p.lon < 0;
+        if (!inside) outside.push({ vehicle: v, lon: p.lon, lat: p.lat });
       }
     }
+    expect(outside).toEqual([]);
   });
 
   it("alterna movimiento y detenciones, y recibe después de grabar", () => {
