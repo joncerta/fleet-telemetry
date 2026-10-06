@@ -9,6 +9,11 @@ declare module "vitest" {
     gatewayUrl: string;
     /** Base URL de fleet-api que levantó el arnés (puerto propio del e2e). */
     fleetApiUrl: string;
+    /** Base URL del agente que levantó el arnés (puerto propio del e2e, modelo con guion). */
+    agentUrl: string;
+    /** Servidor de control del arnés (parar y volver a levantar un servicio) y su token: usa `service-control.ts`. */
+    controlUrl: string;
+    controlToken: string;
     /** Fin de cada partición de telemetry.raw (partición -> offset) cuando se ancló el grupo del processor: no lee nada anterior. */
     rawBacklogEnd: Record<string, string>;
     /** Consumer group del processor del e2e. */

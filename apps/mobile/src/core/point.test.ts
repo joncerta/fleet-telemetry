@@ -1,6 +1,6 @@
 import { telemetryPointSchema } from "@fleet/contracts";
 import { describe, expect, it } from "vitest";
-import { buildPoint, type RawFix } from "./point";
+import { buildPoint, toRawFix, type RawFix } from "./point";
 import { VEHICLE_ID, uuid } from "./test-helpers";
 
 const fix = (over: Partial<RawFix> = {}): RawFix => ({
@@ -15,6 +15,36 @@ const fix = (over: Partial<RawFix> = {}): RawFix => ({
   ...over,
 });
 const ctx = { vehicleId: VEHICLE_ID, newEventId: () => uuid(1) };
+
+describe("toRawFix", () => {
+  const location = {
+    timestamp: 1_700_000_123_000,
+    mocked: true,
+    coords: { latitude: 4.6, longitude: -74.08, altitude: 2600, accuracy: 8, speed: 3, heading: 90 },
+  };
+  it("toma la hora del fix y copia coords y mocked", () => {
+    expect(toRawFix(location)).toEqual({
+      timestamp: 1_700_000_123_000,
+      latitude: 4.6,
+      longitude: -74.08,
+      altitude: 2600,
+      accuracy: 8,
+      speed: 3,
+      heading: 90,
+      mocked: true,
+    });
+  });
+  it("mocked ausente (iOS o no reportado) queda undefined y buildPoint lo trata como false", () => {
+    const { mocked: _m, ...rest } = location;
+    const raw = toRawFix(rest);
+    expect(raw.mocked).toBeUndefined();
+    const built = buildPoint(raw, ctx);
+    expect(built.ok && built.point.mocked).toBe(false);
+  });
+  it("no usa el reloj del teléfono", () => {
+    expect(toRawFix({ ...location, timestamp: 42 }).timestamp).toBe(42);
+  });
+});
 
 describe("buildPoint", () => {
   it("usa la hora del fix GPS y no la del reloj del teléfono", () => {

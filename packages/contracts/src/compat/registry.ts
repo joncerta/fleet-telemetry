@@ -1,4 +1,11 @@
 import {
+  agentHealthResponseSchema,
+  agentHealthResponseTolerantSchema,
+  chatRequestSchema,
+  chatResponseSchema,
+  chatResponseTolerantSchema,
+} from "../agent.js";
+import {
   alertEventSchema,
   alertEventTolerantSchema,
   alertSchema,
@@ -106,4 +113,10 @@ export const contractRegistry: readonly ContractEntry[] = [
   { name: "device-pair-request", schema: devicePairRequestSchema, versions: [1] },
   { name: "device-pair-response", schema: devicePairResponseSchema, versions: [1] },
   { name: "device-pair-response-tolerant", schema: devicePairResponseTolerantSchema, versions: [1] },
+  // Agente (fase 1c, agent.ts): todo v1.
+  { name: "chat-request", schema: chatRequestSchema, versions: [1] },
+  { name: "chat-response", schema: chatResponseSchema, versions: [1] },
+  { name: "chat-response-tolerant", schema: chatResponseTolerantSchema, versions: [1] },
+  { name: "agent-health-response", schema: agentHealthResponseSchema, versions: [1] },
+  { name: "agent-health-response-tolerant", schema: agentHealthResponseTolerantSchema, versions: [1] },
 ];

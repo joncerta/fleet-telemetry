@@ -1,0 +1,53 @@
+# Vincular con código: uno incompleto o inexistente se rechaza con mensaje; uno válido vincula y lleva a la pantalla de turno.
+# Requiere fleet-api arriba (pnpm dev). Uso:
+#   maestro test -e PAIRING_CODE=ABCD2345 apps/mobile/.maestro/01-vincular.yaml
+appId: co.fleet.driver
+env:
+  DEV_CLIENT_URL: "fleetdriver://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081"
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+    permissions:
+      all: allow
+- runFlow: subflows/open-dev-client.yaml
+- assertVisible:
+    id: "pairing-screen"
+# Código incompleto: no llega a la red y explica el formato.
+- tapOn:
+    id: "code-input"
+- inputText: "ABC"
+- tapOn:
+    id: "link-button"
+- assertVisible:
+    id: "pairing-error"
+- assertNotVisible:
+    id: "shift-screen"
+# Código bien formado pero inexistente: el servidor responde 404 invalid_pairing_code.
+- eraseText: 10
+- inputText: "ZZZZ2222"
+- tapOn:
+    id: "link-button"
+- extendedWaitUntil:
+    visible:
+      id: "pairing-error"
+      text: ".*no es válido.*"
+    timeout: 15000
+- assertNotVisible:
+    id: "shift-screen"
+# Código válido.
+- eraseText: 10
+- inputText: ${PAIRING_CODE}
+- tapOn:
+    id: "link-button"
+- extendedWaitUntil:
+    visible:
+      id: "shift-screen"
+    timeout: 15000
+- assertVisible:
+    id: "start-shift"
+# Las credenciales sobreviven a reiniciar la app (secure-store y meta).
+- stopApp
+- launchApp
+- assertVisible:
+    id: "shift-screen"

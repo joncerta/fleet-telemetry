@@ -61,8 +61,14 @@ export function ShiftScreen({ model }: { model: AppModel }) {
 
       {model.diagnostics?.pausedReason != null && (
         <Card tone="danger" testID="unlinked-card">
-          <Text style={[shared.body, { color: colors.danger }]}>Dispositivo no vinculado. Los puntos se guardan, pero no se envían.</Text>
-          <Text style={shared.muted}>Vuelve a pegar el token en la pantalla de vinculación (pestaña Vincular).</Text>
+          <Text style={[shared.body, { color: colors.danger }]}>
+            {model.diagnostics.pausedReason === "client_error"
+              ? "El envío está detenido por un error de la app. Los puntos se guardan; se reintentará con una versión nueva."
+              : "Dispositivo no vinculado o token revocado. Los puntos se guardan, pero no se envían."}
+          </Text>
+          {model.diagnostics.pausedReason !== "client_error" && (
+            <Text style={shared.muted}>Vincula de nuevo con un código en la pestaña Vincular.</Text>
+          )}
         </Card>
       )}
     </View>

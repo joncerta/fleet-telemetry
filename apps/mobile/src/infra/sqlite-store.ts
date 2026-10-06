@@ -12,7 +12,6 @@ import type {
 const DB_NAME = "fleet-outbox.db";
 /** Tablas de diagnóstico acotadas: se conservan las más recientes; el total acumulado vive en `counters`. */
 const KEEP_REJECTED = 1_000;
-const KEEP_DEAD = 200;
 const BUSY_TIMEOUT_MS = 5_000;
 
 /**
@@ -48,7 +47,7 @@ const MIGRATIONS: readonly string[] = [
   `,
 ];
 
-type Counter = "sent" | "discarded" | "invalid_local" | "rejected_total" | "dead_total";
+type Counter = "sent" | "discarded" | "invalid_local" | "rejected_total" | "dead_total" | "task_failures";
 
 interface OutboxRow {
   event_id: string;
@@ -257,16 +256,17 @@ export class SqliteOutboxStore implements OutboxStore {
         reason,
         nowMs,
       );
+      // Sin recorte: un 400 pausa el envío, así que `dead` crece como mucho un lote por pausa; recortarlo perdería payloads.
       await this.#bump("dead_total", 1);
-      await this.#db.runAsync(
-        "DELETE FROM dead WHERE rowid NOT IN (SELECT rowid FROM dead ORDER BY failed_at DESC, rowid DESC LIMIT ?)",
-        KEEP_DEAD,
-      );
     });
   }
 
   countInvalidLocal(): Promise<void> {
     return this.#tx(() => this.#bump("invalid_local", 1));
+  }
+
+  countTaskFailure(): Promise<void> {
+    return this.#tx(() => this.#bump("task_failures", 1));
   }
 
   counts(): Promise<QueueCounts> {
@@ -285,6 +285,7 @@ export class SqliteOutboxStore implements OutboxStore {
         sent: counter("sent"),
         discarded: counter("discarded"),
         invalidLocal: counter("invalid_local"),
+        taskFailures: counter("task_failures"),
       };
     });
   }

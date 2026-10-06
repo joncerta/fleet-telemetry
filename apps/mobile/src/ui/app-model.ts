@@ -5,7 +5,8 @@ import { isIgnoringBatteryOptimizations } from "../../modules/battery-optimizati
 import { gpsEnabled as readGpsEnabled, readPermissions, requestBackground, requestForeground } from "../background/permissions";
 import { endShift, isTracking, startShift } from "../background/tracking";
 import { batteryStatusOf, type BatteryStatus } from "../core/battery-guidance";
-import { parseCredentialsInput, type CredentialsInputError, type DeviceCredentials } from "../core/credentials";
+import type { DeviceCredentials } from "../core/credentials";
+import { pairDevice, type PairResult } from "../core/pairing";
 import { connectionStateOf, readDiagnostics, type ConnectionState, type Diagnostics } from "../core/diagnostics";
 import { SyncScheduler } from "../core/sync-scheduler";
 import {
@@ -34,7 +35,7 @@ export interface AppModel {
   readonly battery: BatteryStatus;
   readonly prompt: ShiftPrompt;
   readonly busy: boolean;
-  readonly link: (token: string, vehicleId: string) => Promise<CredentialsInputError | null>;
+  readonly link: (code: string) => Promise<PairResult>;
   readonly unlink: () => Promise<void>;
   /** Iniciar turno: encadena los permisos en orden (primer plano, divulgación, segundo plano) y arranca el tracking. */
   readonly startShift: () => Promise<void>;
@@ -127,15 +128,21 @@ export function useAppModel(): AppModel {
   }, [runtime, refresh]);
 
   const link = useCallback(
-    async (token: string, vehicleId: string): Promise<CredentialsInputError | null> => {
-      const parsed = parseCredentialsInput(token, vehicleId);
-      if (!parsed.ok) return parsed.error;
+    async (code: string): Promise<PairResult> => {
       const rt = await getRuntime();
-      await rt.credentials.save(parsed.credentials);
-      await rt.engine.resume(); // levanta la pausa por 401/403 o por falta de token
-      await refresh();
-      scheduler.current?.onForeground();
-      return null;
+      // Vincular (o re-vincular) NO toca el turno: solo reemplaza credenciales y reanuda el sync.
+      const result = await pairDevice({
+        rawCode: code,
+        transport: rt.pairing,
+        credentials: rt.credentials,
+        onPaired: () => rt.engine.resume(),
+        nowMs: Date.now(),
+      });
+      if (result.ok) {
+        await refresh();
+        scheduler.current?.onForeground();
+      }
+      return result;
     },
     [refresh],
   );

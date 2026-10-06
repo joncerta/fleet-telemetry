@@ -26,6 +26,8 @@ export const PARAMS = {
   requestTimeoutMs: 20_000,
   /** Tope de la cola: al llegar, se descartan los más viejos y se cuentan. */
   queueCap: 50_000,
+  /** Pausa por 401/403: cada cuánto se manda UN lote de prueba para detectar que el token volvió a ser válido. */
+  unauthorizedProbeMs: 5 * 60_000,
   /** Reintento periódico mientras haya pendientes y red. */
   periodicSyncMs: 15_000,
 } as const;

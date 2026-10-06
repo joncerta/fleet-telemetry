@@ -1,11 +1,13 @@
+import Constants from "expo-constants";
 import * as Crypto from "expo-crypto";
-import type { CredentialsStore } from "./core/credentials";
+import { createCredentialsStore, type CredentialsStore } from "./core/credentials";
 import { Outbox } from "./core/outbox";
+import type { PairTransport } from "./core/pairing";
 import type { OutboxStore } from "./core/store";
 import { SyncEngine } from "./core/sync-engine";
-import { createHttpTransport, ingestBaseUrl } from "./infra/http-transport";
+import { createHttpTransport, createPairTransport, ingestBaseUrl } from "./infra/http-transport";
 import { logEvent } from "./infra/log";
-import { secureCredentials } from "./infra/secure-credentials";
+import { secureTokenVault } from "./infra/secure-credentials";
 import { SqliteOutboxStore } from "./infra/sqlite-store";
 
 export interface Runtime {
@@ -13,6 +15,7 @@ export interface Runtime {
   readonly outbox: Outbox;
   readonly engine: SyncEngine;
   readonly credentials: CredentialsStore;
+  readonly pairing: PairTransport;
 }
 
 let instance: Promise<Runtime> | null = null;
@@ -32,6 +35,7 @@ export function getRuntime(): Promise<Runtime> {
 
 async function build(): Promise<Runtime> {
   const store = await SqliteOutboxStore.open();
+  const credentials = createCredentialsStore(secureTokenVault, store);
   const outbox = new Outbox({
     store,
     now: () => Date.now(),
@@ -39,8 +43,9 @@ async function build(): Promise<Runtime> {
   });
   const engine = new SyncEngine({
     store,
+    // Fuera de desarrollo exige EXPO_PUBLIC_INGEST_URL https://: si falta, lanza y la app muestra el error de arranque.
     transport: createHttpTransport({ baseUrl: ingestBaseUrl() }),
-    tokens: secureCredentials,
+    tokens: credentials,
     now: () => Date.now(),
     newBatchId: () => Crypto.randomUUID(),
     onEvent: (event) => {
@@ -48,5 +53,7 @@ async function build(): Promise<Runtime> {
       else if (event.type === "batch_acked") logEvent("batch_acked", { sent: event.sent, rejected: event.rejected, released: event.released });
     },
   });
-  return { store, outbox, engine, credentials: secureCredentials };
+  // Una versión nueva de la app levanta la pausa por 400 (client_error).
+  if (await engine.onAppVersion(Constants.expoConfig?.version ?? "unknown")) logEvent("sync_resumed_new_version");
+  return { store, outbox, engine, credentials, pairing: createPairTransport() };
 }

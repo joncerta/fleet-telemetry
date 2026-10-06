@@ -12,7 +12,7 @@ export interface Diagnostics {
   readonly lastError: string | null;
   readonly lastErrorAt: string | null;
   readonly nextAttemptAt: number | null;
-  /** `unauthorized` (401/403) o `unlinked` (sin token): el sync está detenido. */
+  /** `unauthorized` (401/403, con lote de prueba periódico) o `client_error` (400): el sync está detenido. "Sin vincular" no se persiste: se deduce de las credenciales. */
   readonly pausedReason: string | null;
   readonly shiftStartedAt: number | null;
   readonly lastFixAt: number | null;

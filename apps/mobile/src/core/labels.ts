@@ -51,5 +51,6 @@ export function errorLabel(code: string | null): string {
 
 export function pausedLabel(reason: string | null): string | null {
   if (reason === null) return null;
-  return reason === "unlinked" ? "Dispositivo no vinculado" : "Dispositivo no vinculado o token revocado";
+  if (reason === "client_error") return "Envío detenido por un error del cliente (400)";
+  return "Dispositivo no vinculado o token revocado";
 }

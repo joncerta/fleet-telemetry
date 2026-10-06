@@ -38,6 +38,8 @@ export interface QueueCounts {
   readonly discarded: number;
   /** Puntos que no pasaron `telemetryPointSchema` al capturarlos (acumulado). No se encolan. */
   readonly invalidLocal: number;
+  /** Fallos de la tarea de ubicación en segundo plano (acumulado). */
+  readonly taskFailures: number;
 }
 
 export interface SettleInput {
@@ -67,7 +69,11 @@ export type MetaKey =
   | "backoffAttempt"
   | "syncPausedReason"
   | "shiftStartedAt"
-  | "lastFixAt";
+  | "lastFixAt"
+  | "syncPausedAt"
+  | "appVersion"
+  | "vehicleId"
+  | "lastBackgroundDrainAt";
 
 export interface OutboxStore {
   /** INSERT del punto. Si la cola supera `cap`, descarta los `pending` más viejos y suma al contador. Atómico. */
@@ -86,6 +92,7 @@ export interface OutboxStore {
   /** `400`: saca el lote de la cola y lo guarda en `dead` con el motivo. */
   markDead(batchId: string, eventIds: readonly string[], reason: string, nowMs: number): Promise<void>;
   countInvalidLocal(): Promise<void>;
+  countTaskFailure(): Promise<void>;
   counts(): Promise<QueueCounts>;
   rejectedByReason(): Promise<Record<string, number>>;
   getMeta(key: MetaKey): Promise<string | null>;

@@ -14,7 +14,7 @@ describe("labels", () => {
   });
   it("pausa del sync", () => {
     expect(pausedLabel(null)).toBeNull();
-    expect(pausedLabel("unlinked")).toBe("Dispositivo no vinculado");
+    expect(pausedLabel("client_error")).toContain("400");
     expect(pausedLabel("unauthorized")).toContain("revocado");
   });
 });

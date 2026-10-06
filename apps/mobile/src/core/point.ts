@@ -15,6 +15,35 @@ export interface RawFix {
   readonly mocked: boolean | undefined;
 }
 
+/** Forma estructural de `LocationObject` de expo-location (el núcleo no importa expo). */
+export interface LocationLike {
+  readonly timestamp: number;
+  readonly mocked?: boolean | undefined;
+  readonly coords: {
+    readonly latitude: number;
+    readonly longitude: number;
+    readonly altitude: number | null;
+    readonly accuracy: number | null;
+    readonly speed: number | null;
+    readonly heading: number | null;
+  };
+}
+
+/** La hora sale del fix (`location.timestamp`), no de `Date.now()`; `mocked` se propaga tal cual. */
+export function toRawFix(location: LocationLike): RawFix {
+  const { coords } = location;
+  return {
+    timestamp: location.timestamp,
+    latitude: coords.latitude,
+    longitude: coords.longitude,
+    altitude: coords.altitude,
+    accuracy: coords.accuracy,
+    speed: coords.speed,
+    heading: coords.heading,
+    mocked: location.mocked,
+  };
+}
+
 export type BuildPointResult =
   | { readonly ok: true; readonly point: TelemetryPoint }
   /** `reason` nunca lleva coordenadas: se puede loguear. */

@@ -1,0 +1,1 @@
+{"status":"degraded","checks":{"fleetApi":"down"},"dependencies":{"fleetApi":{"breaker":"open"}}}

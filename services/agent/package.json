@@ -1,0 +1,42 @@
+{
+  "name": "@fleet/agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agente LangChain: responde preguntas en lenguaje natural con herramientas tipadas de solo lectura sobre fleet-api, detrás de un circuit breaker.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^11.3.0",
+    "@fastify/rate-limit": "^11.2.0",
+    "@fleet/contracts": "workspace:*",
+    "@fleet/platform": "workspace:*",
+    "@langchain/anthropic": "^1.5.12",
+    "@langchain/core": "^1.2.14",
+    "fastify": "^5.12.5",
+    "fastify-type-provider-zod": "^7.0.0",
+    "langchain": "^1.5.15",
+    "opossum": "^10.0.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@fleet/eslint-config": "workspace:*",
+    "@fleet/fleet-api": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/opossum": "^8.1.9",
+    "@types/pg": "catalog:",
+    "eslint": "catalog:",
+    "pg": "catalog:",
+    "tsx": "^4.23.15",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

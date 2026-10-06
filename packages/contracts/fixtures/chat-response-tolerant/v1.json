@@ -1,0 +1,1 @@
+{"answer":"Hay 1 vehículo detenido más de 20 minutos en zona crítica: ABC123 (23 minutos, Zona crítica Norte 1).","toolCalls":[{"name":"get_stopped_vehicles","input":{"minMinutes":20,"zoneKind":"critical","limit":20},"status":"ok","durationMs":42}],"breaker":{"state":"closed"}}

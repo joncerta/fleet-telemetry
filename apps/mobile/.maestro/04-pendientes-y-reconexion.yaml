@@ -1,6 +1,7 @@
 # Sin red los puntos se acumulan como pendientes; al volver la conexión la cola baja a cero por lotes.
-# Requiere el gateway local arriba (pnpm dev) y -e TOKEN=... -e VEHICLE_ID=...
-# Uso: maestro test -e TOKEN=fdt_... -e VEHICLE_ID=<uuid> apps/mobile/.maestro/04-pendientes-y-reconexion.yaml
+# Requiere el stack local arriba (pnpm dev: ingest-gateway y fleet-api) y un código de vinculación recién generado.
+# Uso: maestro test -e PAIRING_CODE=ABCD2345 apps/mobile/.maestro/04-pendientes-y-reconexion.yaml
+# La captura es un latido cada 5 s (aun detenido): no hace falta mover el emulador. Todas las esperas son por condición.
 appId: co.fleet.driver
 env:
   DEV_CLIENT_URL: "fleetdriver://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081"
@@ -12,67 +13,81 @@ env:
       all: allow
 - runFlow: subflows/open-dev-client.yaml
 - runFlow: subflows/pair.yaml
+- setLocation:
+    latitude: 4.7110
+    longitude: -74.0721
 - tapOn:
     id: "start-shift"
 - extendedWaitUntil:
     visible:
       id: "stop-shift"
     timeout: 15000
-
-# Con red: los primeros puntos se envían.
-- setLocation:
-    latitude: 4.7110
-    longitude: -74.0721
-- waitForAnimationToEnd:
-    timeout: 6000
-- setLocation:
-    latitude: 4.7120
-    longitude: -74.0721
 - tapOn:
     id: "tab-diagnostics"
+
+# Con red: los puntos se envían.
 - extendedWaitUntil:
     visible:
       id: "diag-sent"
       text: "[1-9][0-9]*"
-    timeout: 60000
+    timeout: 90000
 
 # Sin red: modo avión. Nada se pierde; el contador de pendientes sube.
 - setAirplaneMode: enabled
-- repeat:
-    times: 4
-    commands:
-      - setLocation:
-          latitude: 4.7130
-          longitude: -74.0721
-      - waitForAnimationToEnd:
-          timeout: 6000
-      - setLocation:
-          latitude: 4.7140
-          longitude: -74.0721
-      - waitForAnimationToEnd:
-          timeout: 6000
+- extendedWaitUntil:
+    visible:
+      id: "connection-state"
+      text: "Sin conexión"
+    timeout: 30000
 - extendedWaitUntil:
     visible:
       id: "diag-pending"
-      text: "[1-9][0-9]*"
-    timeout: 30000
+      text: "([3-9]|[1-9][0-9]+)"
+    timeout: 90000
 - assertVisible:
     id: "pending-badge"
-    text: "Pendientes: [1-9][0-9]*"
-- assertVisible:
-    id: "connection-state"
-    text: "Sin conexión"
+    text: "Pendientes: ([3-9]|[1-9][0-9]+)"
 
-# Recuperar la conexión: pendientes en cero.
+# Recuperar la conexión. Se termina el turno para que no entren puntos nuevos mientras se verifica el cero.
 - setAirplaneMode: disabled
+- tapOn:
+    id: "tab-shift"
+- tapOn:
+    id: "stop-shift"
+- extendedWaitUntil:
+    visible:
+      id: "start-shift"
+    timeout: 20000
 - extendedWaitUntil:
     visible:
       id: "pending-badge"
       text: "Pendientes: 0"
     timeout: 120000
+
+# Cero rechazados, cero lotes fallidos, cero descartados por tope y cero inválidos al capturar.
+- tapOn:
+    id: "tab-diagnostics"
 - assertVisible:
     id: "diag-pending"
     text: "0"
 - assertVisible:
+    id: "diag-in-flight"
+    text: "0"
+- assertVisible:
     id: "diag-rejected"
     text: "0"
+- assertVisible:
+    id: "diag-dead"
+    text: "0"
+- assertVisible:
+    id: "diag-discarded"
+    text: "0"
+- assertVisible:
+    id: "diag-invalid"
+    text: "0"
+- assertVisible:
+    id: "diag-task-failures"
+    text: "0"
+- assertVisible:
+    id: "diag-sent"
+    text: "[1-9][0-9]*"
