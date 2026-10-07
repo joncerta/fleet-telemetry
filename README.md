@@ -57,12 +57,26 @@ pnpm simulate                          # 30 vehículos en Bogotá y Medellín
 **Uso:**
 - Abre `http://localhost:3000` y entra como `operador@norte.test` u `operador@sur.test`, con la contraseña `SEED_USER_PASSWORD` de tu `.env`.
 - En segundos el simulador deja dos vehículos por tenant detenidos más de 20 minutos en una zona crítica, uno con ubicación simulada y uno que deja de reportar.
+- La columna lateral tiene paneles desplegables que recuerdan si los dejaste abiertos o cerrados, y cada uno muestra su contador aunque esté cerrado:
+  - **Resumen.**
+  - **Alertas en vivo:** las resueltas quedan agrupadas en un historial.
+  - **Detenidos.**
+  - **Vehículos:** se abre solo al seleccionar un vehículo en el mapa.
+  - **Zonas:** con "Nueva zona" dibujas el polígono en el mapa (o agregas puntos en el centro con el teclado) y le pones nombre y tipo.
+  - **Vincular dispositivo:** generas el código para un vehículo del catálogo, o con "Nuevo vehículo" (placa y nombre) creas el vehículo y su código en un solo paso.
+  - **Usuarios:** quién tiene acceso a tu flota.
+- El botón "Asistente IA" abre el chat con el agente.
 
 **Sistema completo en contenedores:** `docker compose --profile app up -d --wait`. Incluye `migrate`, `ingest-gateway`, `processor`, `fleet-api`, `agent` y la web (<http://localhost:3000>). Las `NEXT_PUBLIC_*` de la web se fijan al compilar la imagen (por defecto apuntan a `localhost:4002` y `localhost:4003`): para otro origen hay que reconstruirla con `--build-arg`.
 
 **App móvil:**
-- El development build sale de `pnpm --filter @fleet/mobile exec expo run:android`. En Windows hay que activar las rutas largas o compilar desde una ruta corta.
-- Para vincularla: en el dashboard, crea un código de un solo uso y tecléalo en la app.
+- El development build sale de `pnpm --filter @fleet/mobile exec expo run:android`. En Windows, la compilación nativa falla con rutas de más de 260 caracteres.
+  - Con pnpm no basta `subst`: compila desde una copia de trabajo en una ruta corta, por ejemplo `git worktree add --detach C:/ft develop`, seguido de `pnpm install` allí.
+- En un celular físico por USB, con la depuración USB activada, redirige los puertos y apunta la app a `localhost`:
+  - redirige los puertos con `adb reverse tcp:4001 tcp:4001` y `adb reverse tcp:4002 tcp:4002`;
+  - compila con `APP_VARIANT=development EXPO_PUBLIC_INGEST_URL=http://localhost:4001 EXPO_PUBLIC_FLEET_API_URL=http://localhost:4002`.
+  - En el emulador, las URLs por defecto (`10.0.2.2`) ya funcionan.
+- Para vincularla: en el dashboard, en "Vincular dispositivo", elige o crea el vehículo, genera el código de un solo uso y tecléalo en la app.
 
 **Verificación:**
 
@@ -90,7 +104,9 @@ Cada decisión tiene su ADR en [`docs/adr/`](docs/adr/).
 | [009](docs/adr/009-fleet-api-stream-sse.md) | SSE con un consumer group por réplica. El snapshot sale primero en una transacción `REPEATABLE READ`, y los eventos se bufferean mientras tanto |
 | [010](docs/adr/010-perfil-app-carga-y-diseno-aws.md) | Perfil `app` de compose, k6 verificado por conteos y diseño AWS |
 | [011](docs/adr/011-agente-langchain-herramientas-y-breaker.md) | Agente sin text-to-SQL: tenant tomado de la sesión, breaker por dependencia y modelo con guion para tests deterministas |
-| 012 | Dashboard: un único `EventSource`, reconexión manual y un mapa con `setData`. *En el PR #14* |
+| [012](docs/adr/012-dashboard-web-tiempo-real-mapa-y-chat.md) | Dashboard: un único `EventSource`, reconexión manual con jitter, un mapa con `setData` limitado y la imagen `standalone` de la web |
+| [013](docs/adr/013-catalogo-de-vehiculos-y-listado-de-usuarios.md) | Catálogo de vehículos con alta (placa canónica única por tenant) y listado de usuarios de solo lectura, siempre con el tenant de la sesión |
+| [014](docs/adr/014-alta-de-zonas-desde-el-dashboard.md) | Alta de zonas desde el dashboard: polígono validado contra Colombia y por PostGIS (`ST_IsValid`), nombre normalizado y tope por tenant con lock consultivo |
 
 Las reglas que no se negocian están en [`CLAUDE.md`](CLAUDE.md), entre ellas:
 - multi-tenant con el tenant tomado de la identidad;
@@ -120,9 +136,9 @@ Las reglas que no se negocian están en [`CLAUDE.md`](CLAUDE.md), entre ellas:
 ## 5. Testing y caos
 
 **Tests por niveles** (regla 17):
-- **Unitarios:** más de 2000.
+- **Unitarios:** unos 2700.
 - **Integración:** contra TimescaleDB y Redpanda reales, sobre bases y tópicos temporales.
-- **E2E del backend:** el arnés levanta los servicios desde `dist/`. La última suite completa verde tuvo 54 tests:
+- **E2E del backend:** el arnés levanta los servicios desde `dist/`. La última suite completa verde tuvo 74 tests en 12 archivos, entre ellos:
   - lote mixto con rechazos en la DLQ;
   - reenvío idempotente de punta a punta;
   - detención en zona crítica que dispara y resuelve la alerta;
@@ -146,9 +162,24 @@ Los tests de contratos exigen que los fixtures de versiones anteriores sigan par
 
 Latencia del ingest: p95 de 23 ms y p99 de 32 ms. Sin pérdidas ni duplicados en la base, también con el processor matado a mitad de un lote.
 
-Playwright de la web, contra el stack real en CI: 11 de 11 en verde. Cubren login, mapa en vivo, alertas sin recargar, aislamiento entre tenants y entre pestañas, vinculación, reconexión, y chat con el breaker abierto.
+Playwright de la web, contra el stack real: 21 de 21 en verde. Cubren:
+- login, mapa en vivo y alertas sin recargar;
+- aislamiento entre tenants y entre pestañas;
+- paneles desplegables;
+- crear un vehículo y vincularlo, incluido el fallo parcial;
+- dibujar y guardar una zona;
+- reconexión;
+- chat con el breaker abierto.
 
-*Pendiente antes de la entrega:* el `/e2e-check` completo con el agente real.
+**`/e2e-check` final: LISTO, 11 de 11**, el 2026-10-06 sobre `develop` (`02359fc`), con el agente real de Anthropic y el sistema completo en contenedores. Verificó:
+- ingesta, ACK e idempotencia;
+- DLQ;
+- coordenadas en `[lng, lat]` y UTC;
+- detención con la hora del fix GPS y alertas;
+- SSE;
+- **aislamiento Norte/Sur** en API, SSE, catálogo, usuarios, zonas y agente, también ante una instrucción inyectada;
+- el breaker abriéndose y recuperándose;
+- todas las suites en verde.
 
 ## 6. Auditoría de la IA
 
